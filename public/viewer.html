@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="dark" data-title-key="viewerTitle">
   <head>
     <meta charset="UTF-8" />
     <meta
@@ -8,6 +8,7 @@
     />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#0e0e12" />
     <title>Viewer · PDF Presenter</title>
     <link rel="stylesheet" href="/css/style.css" />
     <!-- Favicon -->
@@ -25,13 +26,18 @@
   <body class="viewer-page">
     <!-- Connection screen -->
     <div class="viewer-connect" id="viewerConnect">
+      <div class="rc-connect-tools">
+        <button type="button" class="btn-icon lang-toggle" id="vcLang">ع</button>
+      </div>
       <div class="vc-logo"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l8.66 5v10L12 22l-8.66-5V7L12 2z"/></svg></div>
-      <h1>Join Presentation</h1>
-      <p>Enter the session ID to view the presentation</p>
-      <div class="vc-input-row">
+      <h1 data-i18n="joinHeading">Join Presentation</h1>
+      <p data-i18n="joinHint">Enter the session ID to view the presentation</p>
+      <div class="vc-input-row" dir="ltr">
         <input
           type="text"
           id="sessionInput"
+          data-i18n-placeholder="sessionIdPlaceholder"
+          data-i18n-aria="sessionIdLabel"
           placeholder="16-character session ID"
           maxlength="16"
           autocapitalize="characters"
@@ -39,24 +45,26 @@
           autocomplete="off"
           spellcheck="false"
         />
-        <button type="button" class="btn btn-primary" id="connectBtn">Join</button>
+        <button type="button" class="btn btn-primary" id="connectBtn" data-i18n="join">Join</button>
       </div>
       <div class="vc-password-row" id="passwordRow" style="margin-top: 12px;" hidden>
         <div class="password-input-wrapper" style="position: relative; flex: 1;">
           <input
             type="password"
             id="passwordInput"
+            data-i18n-placeholder="passwordPlaceholder"
+            data-i18n-aria="sessionPassword"
             placeholder="Enter session password"
             maxlength="32"
             autocomplete="current-password"
             aria-label="Session password"
-            style="padding-right: 40px;"
+            style="padding-inline-end: 40px;"
           />
-          <button type="button" id="togglePassword" aria-label="Show password" class="password-toggle-btn" style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: transparent; border: none; cursor: pointer; padding: 4px; color: var(--text-2);" title="Show password">
+          <button type="button" id="togglePassword" aria-label="Show password" data-i18n-aria="showPassword" data-i18n-title="showPassword" class="password-toggle-btn" style="position: absolute; inset-inline-end: 8px; top: 50%; transform: translateY(-50%); background: transparent; border: none; cursor: pointer; padding: 4px; color: var(--text-2);" title="Show password">
             <svg class="eye-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
           </button>
         </div>
-        <button type="button" class="btn btn-secondary" id="passwordBtn">Unlock</button>
+        <button type="button" class="btn btn-secondary" id="passwordBtn" data-i18n="unlock">Unlock</button>
       </div>
       <p class="vc-hint" id="vcHint" role="status" aria-live="polite"></p>
     </div>
@@ -64,40 +72,48 @@
     <!-- Slide view (shown after connected) -->
     <div class="viewer-slide" id="viewerSlide" hidden>
       <div class="vs-header" id="vsHeader">
-        <span class="vs-session-name" id="vsSessionName" style="font-weight: 600; color: var(--accent); margin-right: 12px;" hidden>Untitled Session</span>
-        <span class="vs-session-badge" id="vsSessionBadge">—</span>
-        <span class="vs-viewer-count" id="vsViewerCount" title="Viewers connected">— viewers</span>
-        <span class="vs-status disconnected" id="vsStatusDot" role="status">○ Connecting</span>
-        <button type="button" class="vs-share-btn" id="vsShareBtn" title="Share session" aria-label="Share session">
+        <span class="vs-session-name" id="vsSessionName" dir="auto" style="font-weight: 600; color: var(--accent); margin-inline-end: 12px;" hidden>Untitled Session</span>
+        <span class="vs-session-badge" id="vsSessionBadge" dir="ltr">—</span>
+        <span class="vs-viewer-count" id="vsViewerCount" data-i18n-title="viewersConnected" title="Viewers connected">—</span>
+        <span class="vs-status disconnected" id="vsStatusDot" role="status">○</span>
+        <a class="vs-share-btn" id="vsDownloadBtn" data-i18n-title="downloadPdf" data-i18n-aria="downloadPdf" title="Download PDF" aria-label="Download PDF" hidden>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+        </a>
+        <button type="button" class="vs-share-btn lang-toggle" id="vsLang">ع</button>
+        <button type="button" class="vs-share-btn" id="vsShareBtn" data-i18n-title="shareSession" data-i18n-aria="shareSession" title="Share session" aria-label="Share session">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
         </button>
-        <button type="button" class="vs-fullscreen-btn" id="vsFullscreenBtn" title="Fullscreen" aria-label="Fullscreen">
+        <button type="button" class="vs-fullscreen-btn" id="vsFullscreenBtn" data-i18n-title="fullscreen" data-i18n-aria="fullscreen" title="Fullscreen" aria-label="Fullscreen">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg>
         </button>
       </div>
 
       <!-- Slide canvas container -->
       <div class="vs-canvas-wrap" id="vsCanvasWrap">
-        <div class="vs-stage">
-          <canvas id="viewerCanvas"></canvas>
-          <!-- Remote cursor indicator (positioned in % of the slide) -->
-          <div class="remote-cursor" id="remoteCursor"></div>
+        <div class="vs-stage" id="vsStage" dir="ltr">
+          <div class="zoom-layer" id="vsZoomLayer">
+            <canvas id="viewerCanvas"></canvas>
+            <canvas class="annotation-layer" id="vsInk"></canvas>
+            <!-- Remote cursor indicator (positioned in % of the slide) -->
+            <div class="remote-cursor" id="remoteCursor"></div>
+          </div>
+          <div class="spotlight-layer" id="vsSpotlight"></div>
         </div>
-        <div class="vs-presenter-offline" id="vsPresenterOffline" hidden>Presenter offline — waiting…</div>
+        <div class="vs-presenter-offline" id="vsPresenterOffline" hidden data-i18n="presenterOffline">Presenter offline — waiting…</div>
         <div class="vs-waiting" id="vsWaiting" hidden>
           <div class="vs-waiting-icon">
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
           </div>
-          <span>Waiting for the presenter to upload a PDF…</span>
-          <p class="vs-waiting-hint">The slides appear here automatically as soon as the presenter uploads them.</p>
+          <span data-i18n="waitingForPdf">Waiting for the presenter to upload a PDF…</span>
+          <p class="vs-waiting-hint" data-i18n="waitingForPdfHint">The slides appear here automatically as soon as the presenter uploads them.</p>
           <button type="button" class="vs-waiting-btn" id="vsRefreshBtn">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
-            Refresh Session
+            <span data-i18n="refreshSession">Refresh Session</span>
           </button>
         </div>
         <div class="vs-loading" id="vsLoading" hidden>
           <div class="vs-spinner"></div>
-          <span>Loading slide...</span>
+          <span data-i18n="loadingSlide">Loading slide…</span>
         </div>
         <div class="vs-error" id="vsError" role="alert" hidden>
           <div class="vs-error-icon">
@@ -107,38 +123,50 @@
         </div>
       </div>
 
-      <!-- Slide counter overlay -->
-      <div class="vs-counter" id="vsCounter" aria-live="polite">— / —</div>
+      <!-- Slide counter with free-browse controls -->
+      <div class="vs-browse" dir="ltr">
+        <button type="button" class="vs-browse-btn" id="vsPrevBtn" data-i18n-aria="previousSlide" aria-label="Previous slide">&#8249;</button>
+        <div class="vs-counter" id="vsCounter" aria-live="polite">— / —</div>
+        <button type="button" class="vs-browse-btn" id="vsNextBtn" data-i18n-aria="nextSlideAria" aria-label="Next slide">&#8250;</button>
+      </div>
+      <button type="button" class="vs-live-btn" id="vsLiveBtn" hidden></button>
+
+      <!-- Live poll -->
+      <aside class="poll-overlay viewer-poll" id="vsPoll" hidden>
+        <button type="button" class="poll-minimize" id="vsPollToggle" data-i18n-aria="hidePoll" aria-label="Hide poll">−</button>
+        <div id="vsPollBody"></div>
+      </aside>
+      <button type="button" class="poll-reopen" id="vsPollReopen" hidden data-i18n="showPoll">Show poll</button>
 
       <!-- Reconnecting overlay -->
       <div class="vs-reconnecting" id="vsReconnecting" role="status" hidden>
         <div class="vs-spinner"></div>
-        <span>Reconnecting…</span>
-        <button type="button" class="btn btn-sm" id="vsReloadBtn">Reload page</button>
+        <span data-i18n="reconnecting">Reconnecting…</span>
+        <button type="button" class="btn btn-sm" id="vsReloadBtn" data-i18n="reloadPage">Reload page</button>
       </div>
     </div>
 
     <!-- ── Share Modal ─────────────────────────────────────────────── -->
     <div class="modal-backdrop" id="shareModal" role="dialog" aria-modal="true" aria-labelledby="shareModalTitle" hidden>
       <div class="modal-card">
-        <button type="button" class="modal-close" id="closeShareModal" aria-label="Close">
+        <button type="button" class="modal-close" id="closeShareModal" aria-label="Close" data-i18n-aria="close">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
-        <h2 id="shareModalTitle">Share Session</h2>
-        <p class="modal-subtitle">Invite friends to view this presentation</p>
+        <h2 id="shareModalTitle" data-i18n="shareSession">Share Session</h2>
+        <p class="modal-subtitle" data-i18n="shareHint">Invite friends to view this presentation</p>
 
         <div class="qr-single" style="margin: 20px 0;">
           <canvas id="shareQrCanvas"></canvas>
-          <p class="qr-desc">Scan to join as viewer</p>
+          <p class="qr-desc" data-i18n="scanToJoin">Scan to join as viewer</p>
         </div>
         <p class="remote-url" id="shareUrlDisplay">—</p>
 
         <div class="remote-stats" style="margin: 12px 0;">
-          <span>Session: <strong id="shareModalSessionId">—</strong></span>
+          <span><span data-i18n="sessionLabel">Session:</span> <strong id="shareModalSessionId" dir="ltr">—</strong></span>
         </div>
         <button type="button" class="btn btn-secondary" id="copyShareUrlBtn">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-          Copy Link
+          <span data-i18n="copyLink">Copy Link</span>
         </button>
       </div>
     </div>

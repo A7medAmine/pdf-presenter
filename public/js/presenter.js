@@ -3,7 +3,10 @@
  *
  * Responsibilities:
  *  - create or restore a session (survives page reloads via sessionStorage)
- *  - upload / swap the PDF and render it sharply (see lib/pdf-renderer.js)
+ *  - upload / swap the PDF (or a PowerPoint file, converted by the server) and
+ *    render it sharply (see lib/pdf-renderer.js); recent files are kept in
+ *    this browser for one-click re-use
+ *  - draw on slides, show zoom / spotlight from remotes, run audience polls
  *  - navigate with keyboard, clicks, swipes and the thumbnail strip
  *  - stay in sync with remotes and viewers over Socket.io
  *  - approve, reject or block remote controllers
@@ -30,8 +33,17 @@ import {
   enterFullscreen,
   exitFullscreen,
   onFullscreenChange,
+  keepScreenAwake,
+  haptic,
+  setupPwa,
+  formatBytes,
 } from "./lib/common.js";
+import { t, bindLangToggles, onLangChange, currentLang } from "./lib/i18n.js";
 import { openDocument, renderThumbnail, SlideRenderer } from "./lib/pdf-renderer.js";
+import { AnnotationLayer, COLORS } from "./lib/annotations.js";
+import { applyEffect } from "./lib/effects.js";
+import { renderPoll } from "./lib/poll-view.js";
+import { listDecks, getDeckFile, saveDeck, removeDeck } from "./lib/library.js";
 import { startDhikr } from "./lib/dhikr.js";
 
 applySavedTheme();
@@ -41,6 +53,8 @@ applySavedTheme();
 const STORAGE_KEY = "presenter-session";
 const IP_KEY = "presenter-ip";
 const ORIENTATION_KEY = "presenter-orientation";
+const REMEMBER_KEY = "presenter-remember-decks";
+const COLOR_KEY = "presenter-ink-color";
 const SWIPE_THRESHOLD_PX = 50;
 const THUMB_HEIGHT_PX = 44;
 /** Link annotations are only followed for these protocols (never `javascript:`). */
@@ -82,7 +96,30 @@ const dom = {
   slideWrapper: $("slideWrapper"),
   canvas: $("slideCanvas"),
   linkLayer: $("linkLayer"),
+  zoomLayer: $("zoomLayer"),
+  ink: $("inkCanvas"),
+  spotlight: $("spotlightLayer"),
   cursor: $("artificialCursor"),
+  drawToolbar: $("drawToolbar"),
+  drawTools: document.querySelectorAll(".draw-tool[data-tool]"),
+  drawColors: $("drawColors"),
+  drawUndo: $("drawUndo"),
+  drawClear: $("drawClear"),
+  pollBtn: $("pollBtn"),
+  pollModal: $("pollModal"),
+  pollQuestion: $("pollQuestion"),
+  pollOptions: $("pollOptions"),
+  pollStartBtn: $("pollStartBtn"),
+  pollOverlay: $("pollOverlay"),
+  pollOverlayBody: $("pollOverlayBody"),
+  pollCloseBtn: $("pollCloseBtn"),
+  pollHideBtn: $("pollHideBtn"),
+  pollClearBtn: $("pollClearBtn"),
+  allowDownloadToggle: $("allowDownloadToggle"),
+  uploadHint: $("uploadHint"),
+  librarySection: $("librarySection"),
+  libraryList: $("libraryList"),
+  rememberDecks: $("rememberDecks"),
   transition: $("transitionOverlay"),
   prevBtn: $("prevBtn"),
   nextBtn: $("nextBtn"),
@@ -140,9 +177,19 @@ const state = {
   orientation: local.get(ORIENTATION_KEY) === "portrait" ? "portrait" : "landscape",
   /** Increments on every paint so stale async link-layer work can be dropped. */
   paintId: 0,
+  /** Accepted upload extensions (PowerPoint only when the server can convert). */
+  formats: [".pdf"],
+  /** @type {null|"pen"|"highlighter"} */
+  tool: null,
+  color: COLORS.includes(local.get(COLOR_KEY)) ? local.get(COLOR_KEY) : COLORS[0],
+  effect: { mode: "none", x: 0.5, y: 0.5, zoom: 1 },
+  poll: null,
+  pollHidden: false,
+  presence: { viewerCount: 0, remoteCount: 0 },
 };
 
 const renderer = new SlideRenderer(dom.canvas, {
+  boost: () => (state.effect.mode === "zoom" ? state.effect.zoom : 1),
   cacheSize: 5,
   fit(pageWidth, pageHeight) {
     const fullscreen = Boolean(fullscreenElement());
@@ -153,10 +200,13 @@ const renderer = new SlideRenderer(dom.canvas, {
   },
   onPaint({ pageNum, page }) {
     renderLinkLayer(page);
+    applyEffect(state.effect, { layer: dom.zoomLayer, spotlight: dom.spotlight });
     renderer.preload(pageNum + 1);
     renderer.preload(pageNum - 1);
   },
 });
+
+const ink = new AnnotationLayer(dom.ink);
 
 // ─── Session persistence ──────────────────────────────────────────────────────
 
@@ -192,18 +242,38 @@ function setSetupMode(mode) {
   dom.swapCancelBtn.hidden = mode !== "swap";
   if (mode !== "upload" && mode !== "swap") dom.uploadProgress.hidden = true;
 
-  const copy = {
-    create: ["PDF Presenter", "Upload a PDF and start presenting. Control slides from any device."],
-    upload: ["Upload your slides", "Session ready! Upload a PDF to start presenting."],
-    swap: ["Switch PDF", "Upload a new PDF. Everyone stays connected and jumps to the new file."],
-    replaced: ["Opened in another tab", "This session is now controlled from another tab or window. Reload to take it back."],
-  }[mode];
-  if (copy) {
-    dom.setupTitle.textContent = copy[0];
-    dom.setupSubtitle.textContent = copy[1];
-  }
+  dom.librarySection.hidden = mode !== "upload" && mode !== "swap";
+  if (!dom.librarySection.hidden) renderLibrary();
+  paintSetupCopy();
   if (mode === "create") dom.sessionNameInput.focus();
   if (mode === "upload" || mode === "swap") dom.uploadZone.focus();
+}
+
+/** Title and subtitle of the setup card, in the current language. */
+function paintSetupCopy() {
+  const mode = dom.setupOverlay.dataset.mode;
+  const keys = {
+    create: ["appName", "setupCreateSub"],
+    upload: ["setupUploadTitle", "setupUploadSub"],
+    swap: ["setupSwapTitle", "setupSwapSub"],
+    replaced: ["setupReplacedTitle", "setupReplacedSub"],
+  }[mode];
+  if (keys) {
+    dom.setupTitle.textContent = t(keys[0]);
+    dom.setupSubtitle.textContent = t(keys[1]);
+  }
+  const office = state.formats.length > 1;
+  dom.uploadHint.textContent = t(office ? "uploadHintOffice" : "uploadHintPdf");
+  dom.fileInput.accept = office
+    ? `application/pdf,${state.formats.join(",")}`
+    : "application/pdf,.pdf";
+}
+
+/** Asks the server which file types it accepts. */
+async function loadCapabilities() {
+  const { ok, data } = await api("/api/capabilities");
+  if (ok && Array.isArray(data.formats)) state.formats = data.formats;
+  paintSetupCopy();
 }
 
 // ─── Session lifecycle ────────────────────────────────────────────────────────
@@ -212,7 +282,7 @@ async function startSession() {
   const name = dom.sessionNameInput.value.trim() || null;
   const password = dom.sessionPasswordInput.value;
   if (password && password.length < 4) {
-    toast("Password must be at least 4 characters");
+    toast(t("passwordTooShort"));
     dom.sessionPasswordInput.focus();
     return;
   }
@@ -221,7 +291,7 @@ async function startSession() {
   const { ok, data } = await api("/api/session", { method: "POST", body: { name, password: password || null } });
   dom.startSessionBtn.disabled = false;
   if (!ok) {
-    toast(data.error || "Could not create the session");
+    toast(data.error || t("createFailed"));
     return;
   }
 
@@ -250,7 +320,7 @@ async function restoreSession() {
 
   state.session = saved;
   enterSession(data.name, data);
-  toast("Session restored");
+  toast(t("sessionRestored"));
   return true;
 }
 
@@ -268,6 +338,8 @@ function enterSession(name, serverState) {
   dom.endSessionBtn.hidden = false;
   dom.showRemoteBtn.disabled = false;
   dom.showViewerBtn.disabled = false;
+  dom.pollBtn.disabled = false;
+  keepScreenAwake();
 
   connectSocket();
 
@@ -279,12 +351,12 @@ function enterSession(name, serverState) {
 }
 
 function showSessionName(name) {
-  dom.sessionName.textContent = name || "Untitled Session";
+  dom.sessionName.textContent = name || t("untitledSession");
   dom.sessionName.hidden = false;
 }
 
 async function endSession() {
-  if (!confirm("End this session? All viewers and remotes will be disconnected.")) return;
+  if (!confirm(t("confirmEnd"))) return;
   if (state.socket?.connected) await request(state.socket, "end-session");
   leaveSession("/");
 }
@@ -298,10 +370,10 @@ function leaveSession(location) {
 
 async function renameSession() {
   if (!state.joined) return;
-  const name = prompt("Session name:", dom.sessionName.textContent);
+  const name = prompt(t("sessionNamePrompt"), dom.sessionName.textContent);
   if (name === null || !name.trim()) return;
   const res = await request(state.socket, "rename-session", { name });
-  if (!res.ok) toast(res.message || "Could not rename the session");
+  if (!res.ok) toast(res.message || t("renameFailed"));
 }
 
 // ─── Socket ───────────────────────────────────────────────────────────────────
@@ -319,10 +391,10 @@ function connectSocket() {
     if (!res.ok) {
       state.joined = false;
       if (res.code === "SESSION_NOT_FOUND" || res.code === "FORBIDDEN") {
-        toast("This session no longer exists — starting over");
+        toast(t("sessionGone"));
         setTimeout(() => leaveSession("/"), 2000);
       } else {
-        toast(res.message || "Could not join the session");
+        toast(res.message || t("couldNotJoin"));
       }
       return;
     }
@@ -330,6 +402,10 @@ function connectSocket() {
     state.joined = true;
     updatePresence(res.state);
     syncTotalSlides();
+    state.effect = res.state.effect || state.effect;
+    showPoll(res.state.poll);
+    dom.allowDownloadToggle.checked = Boolean(res.state.allowDownload);
+    fetchAnnotations();
     // After a reconnect the server is the source of truth for the position.
     if (state.doc && res.state.currentSlide !== state.currentSlide) showSlide(res.state.currentSlide);
   });
@@ -337,7 +413,7 @@ function connectSocket() {
   socket.on("disconnect", (reason) => {
     state.joined = false;
     if (reason !== "io client disconnect" && reason !== "io server disconnect") {
-      toast("Connection lost — reconnecting…");
+      toast(t("connectionLost"));
     }
   });
 
@@ -348,19 +424,30 @@ function connectSocket() {
   socket.on("presence", updatePresence);
   socket.on("session-renamed", ({ name }) => showSessionName(name));
   socket.on("cursor-move", moveCursor);
+  socket.on("draw-stroke", (chunk) => ink.applyChunk(chunk));
+  socket.on("draw-undo", ({ slide, id }) => ink.removeStroke(slide, id));
+  socket.on("draw-clear", ({ slide }) => ink.clear(slide));
+  socket.on("view-effect", (effect) => {
+    const rerender = (effect.mode === "zoom" ? effect.zoom : 1) !== (state.effect.mode === "zoom" ? state.effect.zoom : 1);
+    state.effect = effect;
+    applyEffect(effect, { layer: dom.zoomLayer, spotlight: dom.spotlight });
+    if (rerender && state.doc) renderer.show(state.currentSlide); // sharper pixels for the new zoom level
+  });
+  socket.on("poll-update", ({ poll }) => showPoll(poll));
 
   socket.on("remote-pending", ({ remoteSocketId, deviceLabel }) => {
     if (state.pendingRemotes.some((p) => p.remoteSocketId === remoteSocketId)) return;
     state.pendingRemotes.push({ remoteSocketId, deviceLabel });
     notificationSound.currentTime = 0;
     notificationSound.play().catch(() => {}); // autoplay may be blocked until first interaction
+    haptic([30, 60, 30]); // tablets used as the presenter screen
     renderApprovalDialog();
   });
 
   socket.on("remote-request-cancelled", ({ remoteSocketId }) => dropPending(remoteSocketId));
 
   socket.on("session-ended", ({ message }) => {
-    toast(message || "Session ended");
+    toast(message || t("sessionEnded"));
     setTimeout(() => leaveSession("/"), 2000);
   });
 
@@ -370,9 +457,10 @@ function connectSocket() {
   });
 }
 
-function updatePresence({ viewerCount = 0, remoteCount = 0 } = {}) {
-  dom.viewerCount.textContent = `${viewerCount} viewer${viewerCount === 1 ? "" : "s"} connected`;
-  dom.remoteCount.textContent = `${remoteCount} remote${remoteCount === 1 ? "" : "s"} connected`;
+function updatePresence({ viewerCount = 0, remoteCount = 0 } = state.presence) {
+  state.presence = { viewerCount, remoteCount };
+  dom.viewerCount.textContent = t("viewersConnectedCount", { count: viewerCount });
+  dom.remoteCount.textContent = t("remotesConnectedCount", { count: remoteCount });
 }
 
 /** Reports the page count once both the socket and the document are ready. */
@@ -396,8 +484,8 @@ function renderApprovalDialog() {
   dom.approvalDialog.hidden = !head;
   if (!head) return;
   const count = state.pendingRemotes.length;
-  dom.approvalCount.textContent = `${count} remote${count === 1 ? "" : "s"} waiting`;
-  dom.approvalDevice.textContent = `Device ${head.deviceLabel}`;
+  dom.approvalCount.textContent = t("remotesWaiting", { count });
+  dom.approvalDevice.textContent = t("deviceLabel", { id: head.deviceLabel });
 }
 
 function dropPending(remoteSocketId) {
@@ -411,31 +499,42 @@ async function answerPending(event) {
   if (!head || !state.joined) return;
   dropPending(head.remoteSocketId);
   const res = await request(state.socket, event, { remoteSocketId: head.remoteSocketId });
-  if (!res.ok) toast(res.message || "Request no longer available");
-  else if (event === "remote-accept") toast(`Remote ${head.deviceLabel} connected`);
-  else if (event === "remote-block") toast(`Device ${head.deviceLabel} blocked`);
+  if (!res.ok) toast(res.message || t("requestGone"));
+  else if (event === "remote-accept") toast(t("remoteConnected", { id: head.deviceLabel }));
+  else if (event === "remote-block") toast(t("deviceBlocked", { id: head.deviceLabel }));
 }
 
 async function toggleRemoteRequests() {
   if (!state.joined) return;
   const res = await request(state.socket, "toggle-remote-requests", { enabled: !state.remoteRequestsEnabled });
-  if (!res.ok) return toast(res.message || "Could not change the setting");
+  if (!res.ok) return toast(res.message || t("settingFailed"));
   state.remoteRequestsEnabled = res.enabled;
-  dom.toggleRemoteRequestsBtn.querySelector("span").textContent = res.enabled
-    ? "Disable remote requests"
-    : "Enable remote requests";
-  dom.toggleRemoteRequestsBtn.classList.toggle("btn-danger", res.enabled);
-  dom.toggleRemoteRequestsBtn.classList.toggle("btn-success", !res.enabled);
-  toast(res.enabled ? "Remote requests enabled" : "Remote requests disabled");
+  paintRemoteRequestsButton();
+  toast(res.enabled ? t("remoteRequestsOn") : t("remoteRequestsOff"));
+}
+
+function paintRemoteRequestsButton() {
+  const label = dom.toggleRemoteRequestsBtn.querySelector("span");
+  label.dataset.i18n = state.remoteRequestsEnabled ? "disableRemoteRequests" : "enableRemoteRequests";
+  label.textContent = t(label.dataset.i18n);
+  dom.toggleRemoteRequestsBtn.classList.toggle("btn-danger", state.remoteRequestsEnabled);
+  dom.toggleRemoteRequestsBtn.classList.toggle("btn-success", !state.remoteRequestsEnabled);
 }
 
 // ─── Upload ───────────────────────────────────────────────────────────────────
 
-const isPdfFile = (file) => file && (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"));
+const extensionOf = (name) => (name.match(/\.[^.]+$/)?.[0] || "").toLowerCase();
+const isOfficeFile = (file) => extensionOf(file.name) !== ".pdf" && state.formats.includes(extensionOf(file.name));
+
+function isAccepted(file) {
+  if (!file) return false;
+  const ext = extensionOf(file.name);
+  return state.formats.includes(ext) || (file.type === "application/pdf" && !ext);
+}
 
 function handleFile(file) {
-  if (!isPdfFile(file)) {
-    toast("Please choose a PDF file");
+  if (!isAccepted(file)) {
+    toast(t(state.formats.length > 1 ? "chooseOfficeFile" : "choosePdfFile"));
     return;
   }
   uploadFile(file);
@@ -447,9 +546,10 @@ function uploadFile(file) {
   const form = new FormData();
   form.append("pdf", file);
 
+  const office = isOfficeFile(file);
   dom.uploadProgress.hidden = false;
   dom.progressFill.style.width = "0%";
-  dom.progressLabel.textContent = "Uploading…";
+  dom.progressLabel.textContent = t("uploading");
   dom.uploadZone.classList.add("busy");
 
   const xhr = new XMLHttpRequest();
@@ -460,12 +560,20 @@ function uploadFile(file) {
 
   xhr.upload.onprogress = (e) => {
     if (!e.lengthComputable) return;
-    const pct = Math.round((e.loaded / e.total) * 90);
+    const pct = Math.round((e.loaded / e.total) * (office ? 60 : 90));
     dom.progressFill.style.width = `${pct}%`;
-    dom.progressLabel.textContent = `Uploading… ${pct}%`;
+    dom.progressLabel.textContent = t("uploadingPct", { pct });
+  };
+  // PowerPoint files are converted after the upload, which can take a while.
+  xhr.upload.onload = () => {
+    if (!office) return;
+    dom.progressFill.style.width = "75%";
+    dom.progressFill.classList.add("indeterminate");
+    dom.progressLabel.textContent = t("converting");
   };
 
   const fail = (message) => {
+    dom.progressFill.classList.remove("indeterminate");
     dom.uploadZone.classList.remove("busy");
     dom.uploadProgress.hidden = true;
     dom.fileInput.value = "";
@@ -474,13 +582,15 @@ function uploadFile(file) {
 
   xhr.onload = async () => {
     const body = xhr.response || {};
-    if (xhr.status !== 201) return fail(`Upload failed: ${body.error || `HTTP ${xhr.status}`}`);
+    if (xhr.status !== 201) return fail(t("uploadFailed", { reason: body.error || `HTTP ${xhr.status}` }));
+    dom.progressFill.classList.remove("indeterminate");
     dom.progressFill.style.width = "100%";
-    dom.progressLabel.textContent = "Opening PDF…";
+    dom.progressLabel.textContent = t("openingPdf");
+    if (dom.rememberDecks.checked) saveDeck(file);
     await loadPdf(body.pdf, 1);
     dom.uploadZone.classList.remove("busy");
   };
-  xhr.onerror = () => fail("Network error during upload");
+  xhr.onerror = () => fail(t("uploadNetworkError"));
   xhr.send(form);
 }
 
@@ -508,10 +618,13 @@ async function loadPdf(pdf, slide) {
     updateCounter();
     buildThumbnailStrip(doc);
     syncTotalSlides();
-    toast(`${pdf.name} — ${doc.numPages} slide${doc.numPages === 1 ? "" : "s"}`);
+    dom.drawToolbar.hidden = false;
+    state.effect = { mode: "none", x: 0.5, y: 0.5, zoom: 1 };
+    fetchAnnotations();
+    toast(`${pdf.name} — ${t("slideCount", { count: doc.numPages })}`);
   } catch (err) {
     console.error("[presenter] PDF load failed", err);
-    toast(`Could not open the PDF: ${err.message}`);
+    toast(t("pdfOpenFailed", { reason: err.message }));
     dom.uploadProgress.hidden = true;
     setSetupMode(state.doc ? "hidden" : "upload");
   }
@@ -537,6 +650,7 @@ function showSlide(slide, { animate = false } = {}) {
   }
   updateCounter();
   renderer.show(state.currentSlide);
+  fetchAnnotations();
 }
 
 const nextSlide = () => goToSlide(state.currentSlide + 1);
@@ -576,8 +690,8 @@ function buildThumbnailStrip(doc) {
     thumb.type = "button";
     thumb.className = "strip-thumb";
     thumb.dataset.page = String(page);
-    thumb.title = `Slide ${page}`;
-    thumb.setAttribute("aria-label", `Go to slide ${page}`);
+    thumb.title = t("slideN", { n: page });
+    thumb.setAttribute("aria-label", t("goToSlide", { n: page }));
     thumb.appendChild(document.createElement("canvas"));
     fragment.appendChild(thumb);
     thumbObserver.observe(thumb);
@@ -635,7 +749,7 @@ async function renderLinkLayer(page) {
       link.title = url.href;
     } else if (annotation.dest) {
       link.href = "#";
-      link.title = "Go to linked slide";
+      link.title = t("goToLinkedSlide");
       link.addEventListener("click", (e) => {
         e.preventDefault();
         followInternalLink(annotation.dest);
@@ -693,9 +807,10 @@ function openModal(modal) {
 function closeModals() {
   dom.remoteModal.hidden = true;
   dom.viewerModal.hidden = true;
+  dom.pollModal.hidden = true;
 }
 
-const anyModalOpen = () => !dom.remoteModal.hidden || !dom.viewerModal.hidden;
+const anyModalOpen = () => !dom.remoteModal.hidden || !dom.viewerModal.hidden || !dom.pollModal.hidden;
 
 async function openRemoteModal() {
   const savedIp = local.get(IP_KEY);
@@ -714,9 +829,9 @@ async function openRemoteModal() {
       ...data.addresses.map(({ address, interface: name }) => new Option(`${address} (${name})`, address)),
     );
     dom.ipSelector.hidden = false;
-    dom.ipNote.textContent = "Several networks detected — pick the one your phone uses, then Apply";
+    dom.ipNote.textContent = t("ipSeveral");
   } else {
-    dom.ipNote.textContent = "Detected LAN address — click Apply to use it in the QR code";
+    dom.ipNote.textContent = t("ipDetected");
   }
   dom.ipNote.style.color = "var(--text-3)";
 }
@@ -724,14 +839,14 @@ async function openRemoteModal() {
 function applyIp() {
   const ip = dom.ipInput.value.trim();
   if (ip && !/^[A-Za-z0-9.-]{1,253}$|^\[?[0-9a-fA-F:]+\]?$/.test(ip)) {
-    dom.ipNote.textContent = "That does not look like an IP address or host name";
+    dom.ipNote.textContent = t("ipInvalid");
     dom.ipNote.style.color = "var(--danger)";
     return;
   }
   if (ip) local.set(IP_KEY, ip);
   else local.remove(IP_KEY);
   refreshShareCodes();
-  dom.ipNote.textContent = ip ? `QR code now points to ${ip}` : "Using the address in your browser bar";
+  dom.ipNote.textContent = ip ? t("ipApplied", { ip }) : t("ipBrowserBar");
   dom.ipNote.style.color = ip ? "var(--success)" : "var(--text-3)";
 }
 
@@ -748,7 +863,7 @@ function setOrientation(orientation) {
 async function copyShareUrl(kind) {
   const url = shareUrl(kind);
   if (!url) return;
-  toast((await copyText(url)) ? "Link copied" : "Copy failed — select the link manually");
+  toast((await copyText(url)) ? t("linkCopied") : t("copyFailed"));
 }
 
 // ─── Fullscreen & resizing ────────────────────────────────────────────────────
@@ -765,6 +880,179 @@ onFullscreenChange(() => {
   dom.slideStrip.classList.toggle("fs-hidden", active);
   dom.slideWrapper.classList.toggle("fs-mode", active);
 });
+
+// ─── Drawing ──────────────────────────────────────────────────────────────────
+
+async function fetchAnnotations() {
+  const slide = state.currentSlide;
+  ink.setSlide(slide, []);
+  if (!state.joined || !state.doc) return;
+  const res = await request(state.socket, "get-annotations", { slide });
+  if (res.ok && slide === state.currentSlide) ink.setSlide(slide, res.strokes);
+}
+
+/** Selects a drawing tool; selecting the active one again turns drawing off. */
+function setTool(tool) {
+  state.tool = tool === state.tool ? null : tool;
+  for (const button of dom.drawTools) button.classList.toggle("active", button.dataset.tool === state.tool);
+  dom.slideWrapper.classList.toggle("drawing", Boolean(state.tool));
+  ink.setInput(
+    state.tool
+      ? { tool: state.tool, color: state.color, onChunk: (chunk) => state.joined && state.socket.emit("draw-stroke", chunk) }
+      : null,
+  );
+}
+
+function buildDrawToolbar() {
+  for (const button of dom.drawTools) button.innerHTML = icons[button.dataset.tool];
+  dom.drawUndo.innerHTML = icons.undo;
+  dom.drawClear.innerHTML = icons.trash;
+  dom.drawColors.replaceChildren(
+    ...COLORS.map((color) => {
+      const swatch = document.createElement("button");
+      swatch.type = "button";
+      swatch.className = "color-swatch";
+      swatch.style.background = color;
+      swatch.dataset.color = color;
+      swatch.setAttribute("aria-label", color);
+      swatch.classList.toggle("active", color === state.color);
+      return swatch;
+    }),
+  );
+}
+
+function setColor(color) {
+  state.color = color;
+  local.set(COLOR_KEY, color);
+  for (const swatch of dom.drawColors.children) swatch.classList.toggle("active", swatch.dataset.color === color);
+  if (state.tool) {
+    const tool = state.tool;
+    state.tool = null;
+    setTool(tool);
+  } else {
+    setTool("pen");
+  }
+}
+
+async function undoStroke() {
+  if (!state.joined || !state.doc) return;
+  const res = await request(state.socket, "draw-undo", { slide: state.currentSlide });
+  if (res.ok && res.id) ink.removeStroke(state.currentSlide, res.id);
+}
+
+async function clearSlide() {
+  if (!state.joined || !state.doc) return;
+  const res = await request(state.socket, "draw-clear", { slide: state.currentSlide });
+  if (res.ok) ink.clear(state.currentSlide);
+}
+
+// ─── Polls ────────────────────────────────────────────────────────────────────
+
+function showPoll(poll) {
+  if (poll?.id !== state.poll?.id) state.pollHidden = false;
+  state.poll = poll || null;
+  dom.pollOverlay.hidden = !poll || state.pollHidden;
+  dom.pollBtn.classList.toggle("active", Boolean(poll));
+  if (!poll) return;
+  renderPoll(dom.pollOverlayBody, poll);
+  dom.pollCloseBtn.hidden = !poll.open;
+}
+
+function openPollModal() {
+  if (state.poll) {
+    // A poll is running: the button brings its results back on screen.
+    state.pollHidden = false;
+    showPoll(state.poll);
+    return;
+  }
+  dom.pollModal.hidden = false;
+  dom.pollQuestion.focus();
+}
+
+async function startPoll() {
+  const question = dom.pollQuestion.value.trim();
+  const options = dom.pollOptions.value
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!question) return toast(t("pollNeedsQuestion"));
+  if (options.length < 2 || options.length > 6) return toast(t("pollNeedsOptions"));
+  if (!state.joined) return toast(t("notConnected"));
+  const res = await request(state.socket, "poll-start", { question, options });
+  if (!res.ok) return toast(res.message);
+  dom.pollQuestion.value = "";
+  dom.pollOptions.value = "";
+  closeModals();
+  showPoll(res.poll);
+}
+
+async function pollCommand(event) {
+  if (!state.joined) return;
+  const res = await request(state.socket, event);
+  if (!res.ok) toast(res.message);
+}
+
+// ─── Downloads ────────────────────────────────────────────────────────────────
+
+async function setDownload(enabled) {
+  if (!state.joined) {
+    dom.allowDownloadToggle.checked = !enabled;
+    return toast(t("notConnected"));
+  }
+  const res = await request(state.socket, "set-download", { enabled });
+  if (!res.ok) {
+    dom.allowDownloadToggle.checked = !enabled;
+    return toast(res.message);
+  }
+  toast(enabled ? t("downloadOn") : t("downloadOff"));
+}
+
+// ─── Library (recent files in this browser) ──────────────────────────────────
+
+async function renderLibrary() {
+  const decks = await listDecks();
+  const usable = decks.filter((deck) => state.formats.includes(extensionOf(deck.name)) || deck.type === "application/pdf");
+  dom.librarySection.hidden = !usable.length || (dom.setupOverlay.dataset.mode !== "upload" && dom.setupOverlay.dataset.mode !== "swap");
+  const dateFormat = new Intl.DateTimeFormat(currentLang() === "ar" ? "ar-u-nu-latn" : "en", { dateStyle: "medium" });
+  dom.libraryList.replaceChildren(
+    ...usable.map((deck) => {
+      const item = document.createElement("li");
+      item.className = "library-item";
+      const open = document.createElement("button");
+      open.type = "button";
+      open.className = "library-open";
+      open.dataset.id = deck.id;
+      const name = document.createElement("span");
+      name.className = "library-name";
+      name.textContent = deck.name;
+      name.dir = "auto";
+      const meta = document.createElement("span");
+      meta.className = "library-meta";
+      meta.textContent = `${formatBytes(deck.size)} · ${dateFormat.format(deck.usedAt)}`;
+      open.append(name, meta);
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "library-remove";
+      remove.dataset.remove = deck.id;
+      remove.innerHTML = icons.cross;
+      remove.title = t("removeFromLibrary");
+      remove.setAttribute("aria-label", t("removeFromLibrary"));
+      item.append(open, remove);
+      return item;
+    }),
+  );
+}
+
+async function openFromLibrary(id) {
+  const file = await getDeckFile(id);
+  if (!file) {
+    toast(t("libraryMissing"));
+    await removeDeck(id);
+    renderLibrary();
+    return;
+  }
+  handleFile(file);
+}
 
 let resizeTimer = null;
 new ResizeObserver(() => {
@@ -804,6 +1092,49 @@ async function toggleLike() {
 // ─── Event wiring ─────────────────────────────────────────────────────────────
 
 bindThemeToggles(dom.themeToggle, dom.setupThemeToggle);
+bindLangToggles($("langToggle"), $("setupLangToggle"));
+onLangChange(() => {
+  paintSetupCopy();
+  updatePresence();
+  renderApprovalDialog();
+  paintRemoteRequestsButton();
+  if (state.poll) showPoll(state.poll);
+  if (state.session) showSessionName(dom.sessionName.textContent);
+  if (!dom.librarySection.hidden) renderLibrary();
+});
+setupPwa($("installBtn"));
+buildDrawToolbar();
+
+dom.rememberDecks.checked = local.get(REMEMBER_KEY) !== "0";
+dom.rememberDecks.addEventListener("change", () => local.set(REMEMBER_KEY, dom.rememberDecks.checked ? "1" : "0"));
+dom.libraryList.addEventListener("click", async (e) => {
+  const remove = e.target.closest("[data-remove]");
+  if (remove) {
+    await removeDeck(remove.dataset.remove);
+    renderLibrary();
+    return;
+  }
+  const open = e.target.closest(".library-open");
+  if (open && !dom.uploadZone.classList.contains("busy")) openFromLibrary(open.dataset.id);
+});
+
+for (const button of dom.drawTools) button.addEventListener("click", () => setTool(button.dataset.tool));
+dom.drawColors.addEventListener("click", (e) => {
+  const swatch = e.target.closest(".color-swatch");
+  if (swatch) setColor(swatch.dataset.color);
+});
+dom.drawUndo.addEventListener("click", undoStroke);
+dom.drawClear.addEventListener("click", clearSlide);
+
+dom.pollBtn.addEventListener("click", openPollModal);
+dom.pollStartBtn.addEventListener("click", startPoll);
+dom.pollCloseBtn.addEventListener("click", () => pollCommand("poll-close"));
+dom.pollClearBtn.addEventListener("click", () => pollCommand("poll-clear"));
+dom.pollHideBtn.addEventListener("click", () => {
+  state.pollHidden = true;
+  showPoll(state.poll);
+});
+dom.allowDownloadToggle.addEventListener("change", () => setDownload(dom.allowDownloadToggle.checked));
 
 dom.startSessionBtn.addEventListener("click", startSession);
 for (const input of [dom.sessionNameInput, dom.sessionPasswordInput]) {
@@ -815,7 +1146,7 @@ dom.togglePasswordBtn.addEventListener("click", () => {
   const show = dom.sessionPasswordInput.type === "password";
   dom.sessionPasswordInput.type = show ? "text" : "password";
   dom.togglePasswordBtn.innerHTML = show ? icons.eyeOff : icons.eye;
-  dom.togglePasswordBtn.title = show ? "Hide password" : "Show password";
+  dom.togglePasswordBtn.title = show ? t("hidePassword") : t("showPassword");
 });
 
 // Upload zone: click, keyboard, drag & drop.
@@ -856,7 +1187,7 @@ dom.showViewerBtn.addEventListener("click", () => {
 });
 
 // Modals.
-for (const modal of [dom.remoteModal, dom.viewerModal]) {
+for (const modal of [dom.remoteModal, dom.viewerModal, dom.pollModal]) {
   modal.addEventListener("click", (e) => {
     if (e.target === modal || e.target.closest(".modal-close")) closeModals();
   });
@@ -895,9 +1226,15 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     if (anyModalOpen()) closeModals();
     else if (dom.setupOverlay.dataset.mode === "swap") setSetupMode("hidden");
+    else if (state.tool) setTool(state.tool);
     return;
   }
   if (isTyping(e.target) || anyModalOpen() || !dom.setupOverlay.classList.contains("hide")) return;
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "z") {
+    e.preventDefault();
+    undoStroke();
+    return;
+  }
   if (e.ctrlKey || e.metaKey || e.altKey) return;
 
   switch (e.key) {
@@ -926,6 +1263,14 @@ document.addEventListener("keydown", (e) => {
     case "F":
       toggleFullscreen();
       break;
+    case "p":
+    case "P":
+      setTool("pen");
+      break;
+    case "h":
+    case "H":
+      setTool("highlighter");
+      break;
   }
 });
 
@@ -933,7 +1278,7 @@ let touchStartX = null;
 dom.slideArea.addEventListener(
   "touchstart",
   (e) => {
-    touchStartX = e.touches.length === 1 ? e.touches[0].clientX : null;
+    touchStartX = e.touches.length === 1 && !state.tool ? e.touches[0].clientX : null;
   },
   { passive: true },
 );
@@ -952,5 +1297,6 @@ dom.slideArea.addEventListener(
 
 startDhikr({ isSuppressed: () => Boolean(fullscreenElement()) });
 loadLikes();
+loadCapabilities();
 setOrientation(state.orientation);
 if (!(await restoreSession())) setSetupMode("create");

@@ -32,8 +32,8 @@ export function openDocument(url) {
 }
 
 /** Device pixel ratio, capped so the backing store stays within MAX_CANVAS_PIXELS. */
-function pixelRatioFor(cssWidth, cssHeight) {
-  const dpr = Math.max(1, window.devicePixelRatio || 1);
+function pixelRatioFor(cssWidth, cssHeight, boost = 1) {
+  const dpr = Math.max(1, window.devicePixelRatio || 1) * boost;
   const maxRatio = Math.sqrt(MAX_CANVAS_PIXELS / Math.max(1, cssWidth * cssHeight));
   return Math.min(dpr, maxRatio);
 }
@@ -42,9 +42,9 @@ function pixelRatioFor(cssWidth, cssHeight) {
  * Starts rendering a page into a new off-screen canvas.
  * @returns {{ promise: Promise<HTMLCanvasElement>, cancel: () => void }}
  */
-function renderOffscreen(page, cssWidth, cssHeight) {
+function renderOffscreen(page, cssWidth, cssHeight, boost) {
   const base = page.getViewport({ scale: 1 });
-  const ratio = pixelRatioFor(cssWidth, cssHeight);
+  const ratio = pixelRatioFor(cssWidth, cssHeight, boost);
   // Backing store matches the CSS box exactly (no 1px stretch from rounding).
   const canvas = document.createElement("canvas");
   canvas.width = Math.round(cssWidth * ratio);
@@ -90,8 +90,10 @@ export class SlideRenderer {
    *   Returns the CSS size the page should occupy, given its size at scale 1.
    * @param {(info: PaintInfo) => void} [options.onPaint] Called after a page is shown.
    * @param {number} [options.cacheSize] Rendered pages kept in memory.
+   * @param {() => number} [options.boost] Extra resolution factor (e.g. the zoom level), so zoomed slides stay sharp.
    */
-  constructor(canvas, { fit, onPaint = () => {}, cacheSize = 4 }) {
+  constructor(canvas, { fit, onPaint = () => {}, cacheSize = 4, boost = () => 1 }) {
+    this.boost = boost;
     this.canvas = canvas;
     this.context = canvas.getContext("2d", { alpha: false });
     this.fit = fit;
@@ -190,7 +192,8 @@ export class SlideRenderer {
     const { width, height } = this.fit(base.width, base.height);
     const cssWidth = Math.max(1, Math.floor(width));
     const cssHeight = Math.max(1, Math.floor(height));
-    const key = `${pageNum}:${cssWidth}x${cssHeight}@${window.devicePixelRatio || 1}`;
+    const boost = Math.max(1, this.boost() || 1);
+    const key = `${pageNum}:${cssWidth}x${cssHeight}@${window.devicePixelRatio || 1}x${boost}`;
 
     let canvas = this.cache.get(key);
     if (canvas) {
@@ -198,7 +201,7 @@ export class SlideRenderer {
     } else {
       let job = this.inflight.get(key);
       if (!job) {
-        job = renderOffscreen(page, cssWidth, cssHeight);
+        job = renderOffscreen(page, cssWidth, cssHeight, boost);
         const done = () => {
           if (this.inflight.get(key) === job) this.inflight.delete(key);
         };

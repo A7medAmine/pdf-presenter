@@ -25,14 +25,15 @@ const MINIMAL_PDF = Buffer.from(
 /**
  * Starts a server. Call `ctx.close()` when done.
  * @param {object} [overrides] Config overrides.
+ * @param {object} [deps] Injected dependencies (e.g. a fake converter).
  */
-async function startServer(overrides = {}) {
+async function startServer(overrides = {}, deps = {}) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pdf-presenter-test-"));
   const config = loadConfig(
     { NODE_ENV: "test" },
     { uploadDir: path.join(tmp, "uploads"), dataDir: path.join(tmp, "data"), ...overrides },
   );
-  const application = await createApp(config, createLogger("silent"));
+  const application = await createApp(config, createLogger("silent"), deps);
   const port = await application.listen(0, "127.0.0.1");
   const baseUrl = `http://127.0.0.1:${port}`;
   const sockets = [];
@@ -72,9 +73,9 @@ async function startServer(overrides = {}) {
     },
 
     /** Uploads a PDF as the presenter. */
-    async uploadPdf(session, buffer = MINIMAL_PDF, filename = "slides.pdf") {
+    async uploadPdf(session, buffer = MINIMAL_PDF, filename = "slides.pdf", type = "application/pdf") {
       const form = new FormData();
-      form.append("pdf", new Blob([buffer], { type: "application/pdf" }), filename);
+      form.append("pdf", new Blob([buffer], { type }), filename);
       return this.request(`/api/upload/${session.sessionId}`, {
         method: "POST",
         body: form,

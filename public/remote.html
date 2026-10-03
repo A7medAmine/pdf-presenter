@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="dark" data-title-key="remoteTitle">
   <head>
     <meta charset="UTF-8" />
     <meta
@@ -8,6 +8,7 @@
     />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#0e0e12" />
     <title>Remote Control · PDF Presenter</title>
     <link rel="stylesheet" href="/css/style.css" />
     <!-- Favicon -->
@@ -16,19 +17,26 @@
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon/favicon-16x16.png">
     <link rel="icon" type="image/x-icon" href="/favicon/favicon.ico">
     <link rel="manifest" href="/favicon/site.webmanifest">
+    <!-- Vendor libraries (bundled, work offline) -->
+    <script src="/vendor/pdf.min.js" defer></script>
     <script src="/socket.io/socket.io.js" defer></script>
     <script type="module" src="/js/remote.js"></script>
   </head>
   <body class="remote-page">
     <!-- Connection screen -->
     <div class="remote-connect" id="remoteConnect">
+      <div class="rc-connect-tools">
+        <button type="button" class="btn-icon lang-toggle" id="rcLangConnect">ع</button>
+      </div>
       <div class="rc-logo"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l8.66 5v10L12 22l-8.66-5V7L12 2z"/></svg></div>
-      <h1>Remote Control</h1>
-      <p>Enter your session ID to connect</p>
-      <div class="rc-input-row">
+      <h1 data-i18n="remoteHeading">Remote Control</h1>
+      <p data-i18n="remoteConnectHint">Enter your session ID to connect</p>
+      <div class="rc-input-row" dir="ltr">
         <input
           type="text"
           id="sessionInput"
+          data-i18n-placeholder="sessionIdPlaceholder"
+          data-i18n-aria="sessionIdLabel"
           placeholder="16-character session ID"
           maxlength="16"
           autocapitalize="characters"
@@ -36,147 +44,176 @@
           autocomplete="off"
           spellcheck="false"
         />
-        <button type="button" class="btn btn-primary" id="connectBtn">Connect</button>
+        <button type="button" class="btn btn-primary" id="connectBtn" data-i18n="connect">Connect</button>
       </div>
       <p class="rc-hint" id="rcHint" role="status" aria-live="polite"></p>
+      <button type="button" class="btn btn-secondary install-btn" id="rcInstall" hidden data-i18n="installApp">Install app</button>
     </div>
 
     <!-- Remote control pad (shown after connected) -->
     <div class="remote-pad" id="remotePad" hidden>
       <div class="rc-header">
-        <span class="rc-session-name" id="rcSessionName" style="font-weight: 600; color: var(--accent); margin-right: 8px;" hidden>Untitled Session</span>
-        <span class="rc-session-badge" id="rcSessionBadge">—</span>
-        <div style="display: flex; align-items: center; gap: 8px">
-          <span class="rc-status disconnected" id="rcStatusDot" role="status">○ Connecting</span>
-          <button
-            type="button"
-            class="btn-icon rc-fullscreen-btn"
-            id="rcHeaderFullscreen"
-            title="Big buttons (fullscreen)"
-            aria-label="Big buttons (fullscreen)"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg>
-          </button>
-          <button
-            type="button"
-            class="btn-icon rc-cursor-btn"
-            id="rcCursorToggle"
-            title="Pointer: drag on the pad to move a dot on the slide"
-            aria-label="Toggle pointer"
-            aria-pressed="false"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/><circle cx="12" cy="12" r="1"/></svg>
-          </button>
+        <div class="rc-header-info">
+          <span class="rc-session-name" id="rcSessionName" dir="auto" hidden>Untitled Session</span>
+          <span class="rc-session-badge" id="rcSessionBadge" dir="ltr">—</span>
         </div>
-        <div style="display: flex; gap: 6px; align-items: center">
-          <button type="button" class="btn-icon" id="rcFullscreen" title="Big buttons (fullscreen)" aria-label="Big buttons (fullscreen)">
+        <div class="rc-header-actions">
+          <span class="rc-status disconnected" id="rcStatusDot" role="status">○</span>
+          <button type="button" class="btn-icon lang-toggle" id="rcLang">ع</button>
+          <button type="button" class="btn-icon" id="rcFullscreen" data-i18n-title="bigButtons" data-i18n-aria="bigButtons" title="Big buttons (fullscreen)" aria-label="Big buttons (fullscreen)">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg>
           </button>
-          <button type="button" class="btn-icon" id="rcDisconnect" title="Disconnect" aria-label="Disconnect">
+          <button type="button" class="btn-icon" id="rcDisconnect" data-i18n-title="disconnect" data-i18n-aria="disconnect" title="Disconnect" aria-label="Disconnect">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
           </button>
         </div>
       </div>
 
-      <!-- Unified Control and Notes Panel -->
       <div class="rc-tab-panel" id="tabControl">
-        <!-- Slide counter display -->
-        <div class="rc-slide-preview">
-          <div class="rc-slide-box" id="rcSlideBox" aria-live="polite">
-            <span id="rcSlideNum">—</span>
-            <span class="rc-slide-divider">/</span>
-            <span id="rcTotalSlides">—</span>
+        <!-- Current and next slide -->
+        <section class="rc-previews" dir="ltr">
+          <div class="rc-current">
+            <div class="rc-preview-label">
+              <span data-i18n="currentSlide">Current slide</span>
+              <span class="rc-slide-box" id="rcSlideBox" aria-live="polite"><span id="rcSlideNum">—</span><span class="rc-slide-divider">/</span><span id="rcTotalSlides">—</span></span>
+            </div>
+            <div class="rc-stage-box" id="rcStageBox">
+              <div class="rc-stage" id="rcStage">
+                <canvas id="rcCanvas"></canvas>
+                <div class="spotlight-layer" id="rcSpotlight"></div>
+                <div class="zoom-indicator" id="rcZoomIndicator" hidden></div>
+                <canvas class="annotation-layer" id="rcInk"></canvas>
+                <div class="rc-touch-layer" id="rcTouch"></div>
+              </div>
+              <p class="rc-stage-empty" id="rcStageEmpty" data-i18n="waitingForPdf">Waiting for the presenter to upload a PDF…</p>
+            </div>
           </div>
-          <p class="rc-slide-label">Current Slide</p>
-        </div>
+          <div class="rc-next">
+            <div class="rc-preview-label"><span data-i18n="nextSlide">Next</span></div>
+            <div class="rc-next-box">
+              <canvas id="rcNextCanvas"></canvas>
+              <span class="rc-next-end" id="rcNextEnd" hidden data-i18n="endOfDeck">End of presentation</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- Tools -->
+        <section class="rc-tools" aria-label="Tools" data-i18n-aria="tools">
+          <div class="rc-tool-row" role="radiogroup">
+            <button type="button" class="rc-tool active" data-tool="none" role="radio" aria-checked="true"><span class="rc-tool-icon" data-icon="hand"></span><span data-i18n="toolNavigate">Navigate</span></button>
+            <button type="button" class="rc-tool" data-tool="pointer" role="radio" aria-checked="false"><span class="rc-tool-icon" data-icon="pointer"></span><span data-i18n="toolPointer">Pointer</span></button>
+            <button type="button" class="rc-tool" data-tool="pen" role="radio" aria-checked="false"><span class="rc-tool-icon" data-icon="pen"></span><span data-i18n="toolPen">Pen</span></button>
+            <button type="button" class="rc-tool" data-tool="highlighter" role="radio" aria-checked="false"><span class="rc-tool-icon" data-icon="highlighter"></span><span data-i18n="toolHighlighter">Highlighter</span></button>
+            <button type="button" class="rc-tool" data-tool="spotlight" role="radio" aria-checked="false"><span class="rc-tool-icon" data-icon="spotlight"></span><span data-i18n="toolSpotlight">Spotlight</span></button>
+            <button type="button" class="rc-tool" data-tool="zoom" role="radio" aria-checked="false"><span class="rc-tool-icon" data-icon="zoom"></span><span data-i18n="toolZoom">Zoom</span></button>
+          </div>
+          <p class="rc-tool-hint" id="rcToolHint"></p>
+          <div class="rc-tool-options" id="rcInkOptions" hidden>
+            <div class="color-swatches" id="rcColors"></div>
+            <button type="button" class="btn btn-sm" id="rcUndo"><span data-i18n="undo">Undo</span></button>
+            <button type="button" class="btn btn-sm btn-danger" id="rcClear"><span data-i18n="clearSlide">Clear slide</span></button>
+          </div>
+          <div class="rc-tool-options" id="rcZoomOptions" hidden>
+            <div class="zoom-levels" id="rcZoomLevels" dir="ltr">
+              <button type="button" class="btn btn-sm" data-zoom="1.5">1.5×</button>
+              <button type="button" class="btn btn-sm active" data-zoom="2">2×</button>
+              <button type="button" class="btn btn-sm" data-zoom="3">3×</button>
+            </div>
+            <button type="button" class="btn btn-sm" id="rcEffectOff"><span data-i18n="resetView">Reset view</span></button>
+          </div>
+        </section>
 
         <!-- Main navigation buttons -->
-        <div class="rc-nav">
+        <div class="rc-nav" dir="ltr">
           <button type="button" class="rc-btn rc-btn-prev" id="rcPrev">
             <span class="rc-arrow">&#8249;</span>
-            <span>Prev</span>
+            <span data-i18n="prev">Prev</span>
           </button>
           <button type="button" class="rc-btn rc-btn-next" id="rcNext">
             <span class="rc-arrow">&#8250;</span>
-            <span>Next</span>
+            <span data-i18n="next">Next</span>
           </button>
         </div>
 
         <!-- Slide jump input -->
         <div class="rc-jump">
-          <label for="jumpInput">Jump to slide</label>
+          <label for="jumpInput" data-i18n="jumpToSlide">Jump to slide</label>
           <div class="rc-jump-row">
             <input type="number" id="jumpInput" min="1" placeholder="1" inputmode="numeric" />
-            <button type="button" class="btn btn-sm" id="jumpBtn">Go</button>
+            <button type="button" class="btn btn-sm" id="jumpBtn" data-i18n="go">Go</button>
           </div>
         </div>
 
-        <!-- Notes Section -->
+        <!-- Notes -->
         <div class="rc-notes-section">
           <div class="rc-notes-toolbar">
-            <span class="notes-label">Speaker Notes</span>
+            <span class="notes-label" id="rcNotesLabel">Notes</span>
             <div class="notes-controls">
-              <button
-                type="button"
-                class="btn-icon notes-font-btn"
-                id="notesFontDown"
-                title="Smaller text"
-              >
-                A−
-              </button>
-              <button
-                type="button"
-                class="btn-icon notes-font-btn"
-                id="notesFontUp"
-                title="Larger text"
-              >
-                A+
-              </button>
-              <button type="button" class="btn btn-sm" id="notesTeleBtn">
-                ▶ Teleprompter
-              </button>
+              <button type="button" class="btn-icon notes-font-btn" id="notesFontDown" data-i18n-title="smallerText" title="Smaller text">A−</button>
+              <button type="button" class="btn-icon notes-font-btn" id="notesFontUp" data-i18n-title="largerText" title="Larger text">A+</button>
+              <button type="button" class="btn btn-sm" id="notesTeleBtn">▶ <span data-i18n="teleprompter">Teleprompter</span></button>
             </div>
           </div>
           <textarea
             id="notesArea"
             class="rc-notes-area"
+            data-i18n-aria="speakerNotes"
+            data-i18n-placeholder="notesPlaceholder"
             aria-label="Speaker notes"
-            placeholder="Type or paste your speaker notes here…&#10;&#10;They stay on your phone while the audience sees the slides."
+            disabled
           ></textarea>
+          <div class="rc-notes-footer">
+            <button type="button" class="btn btn-sm" id="notesExport" data-i18n="exportNotes">Export notes</button>
+            <label class="btn btn-sm" for="notesImport" data-i18n="importNotes">Import notes</label>
+            <input type="file" id="notesImport" accept=".json,.txt,application/json,text/plain" hidden />
+          </div>
         </div>
 
-        <!-- Swipe hint -->
-        <p class="rc-swipe-hint">Tip: a Bluetooth clicker or keyboard arrows also work</p>
+        <!-- Poll -->
+        <details class="rc-poll" id="rcPollSection">
+          <summary><span data-i18n="pollHeading">Audience poll</span> <span class="rc-poll-badge" id="rcPollBadge" hidden data-i18n="pollLive">Live</span></summary>
+          <div class="rc-poll-body">
+            <div id="rcPollCreate" class="poll-form">
+              <input type="text" id="rcPollQuestion" maxlength="140" data-i18n-placeholder="pollQuestionPlaceholder" />
+              <textarea id="rcPollOptions" rows="4" data-i18n-placeholder="pollOptionsPlaceholder"></textarea>
+              <button type="button" class="btn btn-primary btn-sm" id="rcPollStart" data-i18n="startPoll">Start poll</button>
+            </div>
+            <div id="rcPollLive" hidden>
+              <div id="rcPollResults"></div>
+              <div class="poll-actions">
+                <button type="button" class="btn btn-sm" id="rcPollClose" data-i18n="closePoll">Close voting</button>
+                <button type="button" class="btn btn-sm btn-danger" id="rcPollClear" data-i18n="removePoll">Remove poll</button>
+              </div>
+            </div>
+          </div>
+        </details>
+
+        <p class="rc-swipe-hint" data-i18n="clickerTip">Tip: a Bluetooth clicker or keyboard arrows also work</p>
       </div>
 
       <!-- Teleprompter overlay (fullscreen scrolling text) -->
-      <div
-        class="teleprompter-overlay"
-        id="teleprompterOverlay"
-        hidden
-      >
+      <div class="teleprompter-overlay" id="teleprompterOverlay" hidden>
         <div class="tp-toolbar">
-          <button type="button" class="btn-icon" id="tpClose" aria-label="Close teleprompter"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
-          <span class="tp-title">Teleprompter</span>
-          <div class="tp-speed-row">
-            <button type="button" class="btn-icon tp-speed-btn" id="tpSpeedDown" aria-label="Slower">−</button>
+          <button type="button" class="btn-icon" id="tpClose" data-i18n-aria="closeTeleprompter" aria-label="Close teleprompter"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+          <span class="tp-title" data-i18n="teleprompter">Teleprompter</span>
+          <div class="tp-speed-row" dir="ltr">
+            <button type="button" class="btn-icon tp-speed-btn" id="tpSpeedDown" data-i18n-aria="slower" aria-label="Slower">−</button>
             <span class="tp-speed-value" id="tpSpeedValue">1.5</span>
-            <button type="button" class="btn-icon tp-speed-btn" id="tpSpeedUp" aria-label="Faster">+</button>
+            <button type="button" class="btn-icon tp-speed-btn" id="tpSpeedUp" data-i18n-aria="faster" aria-label="Faster">+</button>
           </div>
-          <button type="button" class="btn btn-sm" id="tpPlayPause">⏸ Pause</button>
+          <button type="button" class="btn btn-sm" id="tpPlayPause">⏸</button>
         </div>
         <div class="tp-text-wrap" id="tpTextWrap">
           <div class="tp-text" id="tpText"></div>
         </div>
-        <!-- Slide controls for fullscreen mode -->
-        <div class="tp-slide-controls" id="tpSlideControls">
+        <div class="tp-slide-controls" id="tpSlideControls" dir="ltr">
           <button type="button" class="tp-slide-btn" id="tpPrevSlide">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
-            Prev
+            <span data-i18n="prev">Prev</span>
           </button>
           <span class="tp-slide-indicator" id="tpSlideIndicator">1 / 1</span>
           <button type="button" class="tp-slide-btn" id="tpNextSlide">
-            Next
+            <span data-i18n="next">Next</span>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
           </button>
         </div>
@@ -185,12 +222,12 @@
 
     <!-- Fullscreen overlay for control pad -->
     <div class="rc-fs-overlay" id="rcFsOverlay" hidden>
-      <div class="rfs-counter" id="rfsCounter">— / —</div>
-      <div class="rfs-nav">
-        <button type="button" class="rfs-btn" id="rfsPrev" aria-label="Previous slide">&#8249;</button>
-        <button type="button" class="rfs-btn rfs-next" id="rfsNext" aria-label="Next slide">&#8250;</button>
+      <div class="rfs-counter" id="rfsCounter" dir="ltr">— / —</div>
+      <div class="rfs-nav" dir="ltr">
+        <button type="button" class="rfs-btn" id="rfsPrev" data-i18n-aria="previousSlide" aria-label="Previous slide">&#8249;</button>
+        <button type="button" class="rfs-btn rfs-next" id="rfsNext" data-i18n-aria="nextSlideAria" aria-label="Next slide">&#8250;</button>
       </div>
-      <button type="button" class="rfs-exit" id="rfsExit"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 4px;"><path d="M18 6L6 18M6 6l12 12"/></svg> Exit</button>
+      <button type="button" class="rfs-exit" id="rfsExit"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-inline-end: 4px;"><path d="M18 6L6 18M6 6l12 12"/></svg> <span data-i18n="exit">Exit</span></button>
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>

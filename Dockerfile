@@ -12,6 +12,14 @@ ENV NODE_ENV=production \
     HOST=0.0.0.0
 WORKDIR /app
 
+# LibreOffice converts PowerPoint uploads to PDF. Build with
+# `--build-arg OFFICE=false` for a much smaller, PDF-only image.
+ARG OFFICE=true
+RUN if [ "$OFFICE" = "true" ]; then \
+      apk add --no-cache libreoffice-impress font-noto font-noto-arabic ttf-liberation \
+      && rm -rf /var/cache/apk/*; \
+    fi
+
 # Writable runtime directories owned by the unprivileged `node` user.
 RUN mkdir -p /app/uploads /app/data && chown node:node /app/uploads /app/data
 

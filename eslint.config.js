@@ -19,6 +19,10 @@ module.exports = [
     },
   },
   {
+    files: ["public/sw.js"],
+    languageOptions: { ecmaVersion: 2023, sourceType: "script", globals: globals.serviceworker },
+  },
+  {
     rules: {
       "no-unused-vars": ["error", { argsIgnorePattern: "^_", caughtErrors: "none" }],
       eqeqeq: ["error", "always"],

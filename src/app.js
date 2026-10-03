@@ -14,6 +14,7 @@ const { Server } = require("socket.io");
 
 const { SessionStore } = require("./session-store");
 const { LikesStore } = require("./likes-store");
+const { createConverter } = require("./converter");
 const { registerHttp } = require("./http");
 const { registerRealtime } = require("./realtime");
 
@@ -37,8 +38,9 @@ function isSameOrigin(req) {
 /**
  * @param {ReturnType<import("./config").loadConfig>} config
  * @param {import("./logger").Logger} logger
+ * @param {{ converter?: import("./converter").OfficeConverter }} [deps] Injectable for tests.
  */
-async function createApp(config, logger) {
+async function createApp(config, logger, { converter } = {}) {
   await fs.promises.mkdir(config.uploadDir, { recursive: true });
   await fs.promises.mkdir(config.dataDir, { recursive: true });
 
@@ -53,6 +55,8 @@ async function createApp(config, logger) {
   const likes = new LikesStore({ file: path.join(config.dataDir, "likes.json"), logger: logger.child("likes") });
   await likes.load();
 
+  const officeConverter = converter || createConverter(config, logger.child("convert"));
+
   const app = express();
   const server = http.createServer(app);
   const io = new Server(server, {
@@ -61,7 +65,7 @@ async function createApp(config, logger) {
   });
 
   const realtime = registerRealtime({ io, store, logger: logger.child("ws") });
-  registerHttp(app, { config, store, likes, realtime, logger: logger.child("http") });
+  registerHttp(app, { config, store, likes, converter: officeConverter, realtime, logger: logger.child("http") });
 
   /** Starts listening; resolves with the bound port. */
   function listen(port = config.port, host = config.host) {
@@ -81,7 +85,7 @@ async function createApp(config, logger) {
     await likes.flush();
   }
 
-  return { app, server, io, store, likes, realtime, listen, close };
+  return { app, server, io, store, likes, converter: officeConverter, realtime, listen, close };
 }
 
 module.exports = { createApp };

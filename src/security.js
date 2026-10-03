@@ -101,6 +101,24 @@ function sanitizeDisplayName(value, maxLength = 60) {
   return limited.length > 0 ? limited : null;
 }
 
+/**
+ * Normalizes free text such as poll questions: removes control and format
+ * characters, collapses whitespace and limits the length. Output is always
+ * rendered with `textContent`.
+ *
+ * @returns {string|null} The cleaned text, or `null` when nothing usable remains.
+ */
+function sanitizeText(value, maxLength = 200) {
+  if (typeof value !== "string") return null;
+  const cleaned = value
+    .normalize("NFC")
+    .replace(/[\p{Cc}\p{Cf}]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const limited = Array.from(cleaned).slice(0, maxLength).join("").trim();
+  return limited.length > 0 ? limited : null;
+}
+
 /** Cleans an uploaded file's original name for display purposes only. */
 function sanitizeOriginalFilename(value) {
   if (typeof value !== "string") return "Presentation.pdf";
@@ -130,6 +148,7 @@ module.exports = {
   verifyPassword,
   sanitizeDisplayName,
   sanitizeOriginalFilename,
+  sanitizeText,
   isSessionId,
   isDeviceId,
   isToken,

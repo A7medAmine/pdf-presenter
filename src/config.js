@@ -95,6 +95,11 @@ function loadConfig(env = process.env, overrides = {}) {
     sessionRateWindowMs: readNumber(env, "RATE_LIMIT_WINDOW", 60, { min: 1, max: 24 * 60 }) * 60 * 1000,
     sessionRateMax: readNumber(env, "RATE_LIMIT_MAX", 20, { min: 1, max: 10000 }),
 
+    /** PowerPoint → PDF conversion through LibreOffice: "auto" (when installed) or "off". */
+    officeConversion: (env.OFFICE_CONVERSION || "auto").toLowerCase() === "off" ? "off" : "auto",
+    sofficePath: env.SOFFICE_PATH || null,
+    conversionTimeoutMs: readNumber(env, "CONVERSION_TIMEOUT", 120, { min: 10, max: 900 }) * 1000,
+
     rootDir: ROOT_DIR,
     publicDir: path.join(ROOT_DIR, "public"),
     uploadDir: path.resolve(ROOT_DIR, env.UPLOAD_DIR || "uploads"),

@@ -1,7 +1,7 @@
 {
   "name": "pdf-presenter",
-  "version": "2.0.0",
-  "description": "Open-source PDF slide presenter with real-time remote control",
+  "version": "2.1.0",
+  "description": "Open-source PDF and PowerPoint slide presenter with real-time remote control",
   "main": "server.js",
   "license": "Apache-2.0",
   "scripts": {

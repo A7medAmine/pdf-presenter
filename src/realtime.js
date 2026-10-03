@@ -17,7 +17,8 @@
  *   session-state, slide-update, total-slides-update, pdf-loaded, presence,
  *   presenter-status, session-renamed, session-ended, cursor-move,
  *   remote-pending, remote-request-cancelled, remote-approved, remote-rejected,
- *   presenter-replaced
+ *   presenter-replaced, draw-stroke, draw-undo, draw-clear, view-effect,
+ *   poll-update, download-update
  */
 
 const {
@@ -26,11 +27,19 @@ const {
   isDeviceId,
   sanitizeDisplayName,
 } = require("./security");
-const { toPublicState } = require("./session-store");
+const { toPublicState, noEffect } = require("./session-store");
+const { createPoll, castVote, publicPoll, PollError } = require("./polls");
 
 const MAX_TOTAL_SLIDES = 10_000;
 /** Minimum delay between two forwarded cursor events of one socket (~60 fps). */
 const CURSOR_INTERVAL_MS = 15;
+/** Minimum delay between two forwarded view-effect events of one socket. */
+const EFFECT_INTERVAL_MS = 15;
+/** Drawing budget per socket: stroke chunks and points per second (token buckets). */
+const DRAW_CHUNKS_PER_SEC = 60;
+const DRAW_POINTS_PER_SEC = 4000;
+/** Poll tallies are broadcast at most this often, however fast votes arrive. */
+const POLL_BROADCAST_MS = 250;
 /** Minimum delay between two remote-access requests of one socket. */
 const REMOTE_REQUEST_INTERVAL_MS = 3000;
 /** Generic per-socket event budget (token bucket). */
@@ -151,6 +160,40 @@ function registerRealtime({ io, store, logger }) {
     return true;
   }
 
+  /** Generic token bucket stored on the socket under `key`. */
+  function takeTokens(socket, key, amount, perSecond) {
+    const now = Date.now();
+    const bucket = socket.data[key] || { tokens: perSecond, last: now };
+    bucket.tokens = Math.min(perSecond, bucket.tokens + ((now - bucket.last) / 1000) * perSecond);
+    bucket.last = now;
+    socket.data[key] = bucket;
+    if (bucket.tokens < amount) return false;
+    bucket.tokens -= amount;
+    return true;
+  }
+
+  /** Broadcasts the poll tally, coalescing bursts of votes into one message. */
+  const pollTimers = new Map();
+  function schedulePollBroadcast(session, immediate = false) {
+    const send = () => {
+      pollTimers.delete(session.id);
+      if (store.get(session.id) === session) io.to(session.id).emit("poll-update", { poll: publicPoll(session.poll) });
+    };
+    if (immediate) {
+      clearTimeout(pollTimers.get(session.id));
+      send();
+    } else if (!pollTimers.has(session.id)) {
+      pollTimers.set(session.id, setTimeout(send, POLL_BROADCAST_MS));
+    }
+  }
+
+  /** Validates a slide number against the session. */
+  function slideOf(session, slide) {
+    const last = session.totalSlides || MAX_TOTAL_SLIDES;
+    if (!Number.isInteger(slide) || slide < 1 || slide > last) throw new ClientError("BAD_INPUT", "Invalid slide");
+    return slide;
+  }
+
   /**
    * Registers a handler with uniform validation, rate limiting, error
    * reporting and acknowledgements.
@@ -166,7 +209,7 @@ function registerRealtime({ io, store, logger }) {
         const result = await handler(data);
         reply({ ok: true, ...(result || {}) });
       } catch (err) {
-        if (err instanceof ClientError) {
+        if (err instanceof ClientError || err instanceof PollError) {
           logger.debug(`${event} rejected for ${socket.id}: ${err.code}`);
           reply({ ok: false, code: err.code, message: err.message });
         } else {
@@ -196,9 +239,9 @@ function registerRealtime({ io, store, logger }) {
 
     /**
      * join-session — presenter or viewer joins.
-     * Payload: { sessionId, role: "presenter"|"viewer", presenterToken?, viewerToken? }
+     * Payload: { sessionId, role: "presenter"|"viewer", presenterToken?, viewerToken?, deviceId? }
      */
-    handle(socket, "join-session", ({ sessionId, role, presenterToken, viewerToken }) => {
+    handle(socket, "join-session", ({ sessionId, role, presenterToken, viewerToken, deviceId }) => {
       assertNotJoined();
       const session = findSession(sessionId);
 
@@ -225,6 +268,8 @@ function registerRealtime({ io, store, logger }) {
         if (!store.canView(session, viewerToken)) {
           throw new ClientError("PASSWORD_REQUIRED", "This session requires a password");
         }
+        // The device ID only keys poll votes, so a missing one falls back to the socket.
+        socket.data.deviceId = isDeviceId(deviceId) ? deviceId : null;
         attach(socket, session, ROLES.VIEWER);
       } else {
         // Remotes must go through remote-request-access (presenter approval).
@@ -357,6 +402,11 @@ function registerRealtime({ io, store, logger }) {
       if (target !== session.currentSlide) {
         session.currentSlide = target;
         io.to(session.id).emit("slide-update", { currentSlide: target });
+        // A zoom targets one slide's content; the spotlight may follow the speaker.
+        if (session.effect.mode === "zoom") {
+          session.effect = noEffect();
+          io.to(session.id).emit("view-effect", session.effect);
+        }
       }
       store.touch(session);
       return { currentSlide: session.currentSlide };
@@ -391,6 +441,121 @@ function registerRealtime({ io, store, logger }) {
 
       const clamp = (v) => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0);
       socket.volatile.to(session.id).emit("cursor-move", { x: clamp(payload.x), y: clamp(payload.y), active });
+    });
+
+    // ── Annotations ────────────────────────────────────────────────────────
+
+    /**
+     * draw-stroke — streams one chunk of a pen/highlighter stroke (presenter or remote).
+     * Payload: { slide, id, tool, color, width, points: [x0, y0, …] }. Fire-and-forget;
+     * the sanitized chunk is forwarded to every other member.
+     */
+    socket.on("draw-stroke", (payload) => {
+      const role = socket.data.role;
+      if ((role !== ROLES.PRESENTER && role !== ROLES.REMOTE) || !payload || typeof payload !== "object") return;
+      const session = store.get(socket.data.sessionId);
+      if (!session?.pdf) return;
+      const points = Array.isArray(payload.points) ? payload.points.length / 2 : 0;
+      if (!takeTokens(socket, "drawChunks", 1, DRAW_CHUNKS_PER_SEC)) return;
+      if (!takeTokens(socket, "drawPoints", points, DRAW_POINTS_PER_SEC)) return;
+      if (Number.isInteger(payload.slide) && session.totalSlides && payload.slide > session.totalSlides) return;
+      const chunk = session.annotations.apply(payload);
+      if (chunk) socket.to(session.id).emit("draw-stroke", chunk);
+    });
+
+    /** get-annotations — Payload: { slide }. Answers { slide, strokes }. */
+    handle(socket, "get-annotations", ({ slide }) => {
+      const session = requireMembership(socket, Object.values(ROLES));
+      const target = slideOf(session, slide);
+      return { slide: target, strokes: session.annotations.get(target) };
+    });
+
+    /** draw-undo — removes the latest stroke of a slide. Payload: { slide } */
+    handle(socket, "draw-undo", ({ slide }) => {
+      const session = requireMembership(socket, [ROLES.PRESENTER, ROLES.REMOTE]);
+      const target = slideOf(session, slide);
+      const id = session.annotations.undo(target);
+      if (id) io.to(session.id).emit("draw-undo", { slide: target, id });
+      return { id };
+    });
+
+    /** draw-clear — removes every stroke of a slide. Payload: { slide } */
+    handle(socket, "draw-clear", ({ slide }) => {
+      const session = requireMembership(socket, [ROLES.PRESENTER, ROLES.REMOTE]);
+      const target = slideOf(session, slide);
+      session.annotations.clear(target);
+      io.to(session.id).emit("draw-clear", { slide: target });
+    });
+
+    // ── Zoom & spotlight ───────────────────────────────────────────────────
+
+    /**
+     * view-effect — Payload: { mode: "none"|"spotlight"|"zoom", x, y, zoom }.
+     * Fire-and-forget, throttled; "none" is always forwarded so effects never get stuck.
+     */
+    socket.on("view-effect", (payload) => {
+      const role = socket.data.role;
+      if ((role !== ROLES.PRESENTER && role !== ROLES.REMOTE) || !payload || typeof payload !== "object") return;
+      const session = store.get(socket.data.sessionId);
+      if (!session) return;
+      const mode = ["none", "spotlight", "zoom"].includes(payload.mode) ? payload.mode : null;
+      if (!mode) return;
+
+      const now = Date.now();
+      if (mode !== "none" && now - (socket.data.lastEffect || 0) < EFFECT_INTERVAL_MS) return;
+      socket.data.lastEffect = now;
+
+      const clamp = (v, min, max, fallback) => (Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : fallback);
+      session.effect =
+        mode === "none"
+          ? noEffect()
+          : { mode, x: clamp(payload.x, 0, 1, 0.5), y: clamp(payload.y, 0, 1, 0.5), zoom: clamp(payload.zoom, 1, 5, 2) };
+      socket.to(session.id).emit("view-effect", session.effect);
+    });
+
+    // ── Polls ──────────────────────────────────────────────────────────────
+
+    /** poll-start — replaces any current poll. Payload: { question, options: string[] } */
+    handle(socket, "poll-start", ({ question, options }) => {
+      const session = requireMembership(socket, [ROLES.PRESENTER, ROLES.REMOTE]);
+      session.poll = createPoll({ question, options });
+      schedulePollBroadcast(session, true);
+      return { poll: publicPoll(session.poll) };
+    });
+
+    /** poll-vote — viewers only. Payload: { pollId, option } */
+    handle(socket, "poll-vote", ({ pollId, option }) => {
+      const session = requireMembership(socket, [ROLES.VIEWER]);
+      if (!session.poll || session.poll.id !== pollId) throw new ClientError("NOT_FOUND", "This poll has ended");
+      castVote(session.poll, socket.data.deviceId || socket.id, option);
+      schedulePollBroadcast(session);
+      return { option };
+    });
+
+    /** poll-close — freezes the results. */
+    handle(socket, "poll-close", () => {
+      const session = requireMembership(socket, [ROLES.PRESENTER, ROLES.REMOTE]);
+      if (!session.poll) throw new ClientError("NOT_FOUND", "No poll running");
+      session.poll.open = false;
+      schedulePollBroadcast(session, true);
+    });
+
+    /** poll-clear — removes the poll from every screen. */
+    handle(socket, "poll-clear", () => {
+      const session = requireMembership(socket, [ROLES.PRESENTER, ROLES.REMOTE]);
+      session.poll = null;
+      schedulePollBroadcast(session, true);
+    });
+
+    // ── Downloads ──────────────────────────────────────────────────────────
+
+    /** set-download — lets viewers download the PDF. Payload: { enabled: boolean } */
+    handle(socket, "set-download", ({ enabled }) => {
+      const session = requireMembership(socket, [ROLES.PRESENTER]);
+      if (typeof enabled !== "boolean") throw new ClientError("BAD_INPUT", "`enabled` must be a boolean");
+      session.allowDownload = enabled;
+      io.to(session.id).emit("download-update", { enabled });
+      return { enabled };
     });
 
     /** rename-session — Payload: { name } */
@@ -446,7 +611,11 @@ function registerRealtime({ io, store, logger }) {
   return {
     announcePdf,
     endSession,
-    close: () => clearInterval(sweeper),
+    close: () => {
+      clearInterval(sweeper);
+      for (const timer of pollTimers.values()) clearTimeout(timer);
+      pollTimers.clear();
+    },
   };
 }
 

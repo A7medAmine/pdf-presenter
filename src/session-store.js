@@ -11,6 +11,8 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { generateSessionId, randomToken, sanitizeDisplayName } = require("./security");
+const { AnnotationBoard } = require("./annotations");
+const { publicPoll } = require("./polls");
 
 /** Upper bound of remembered viewer tokens per session (oldest are evicted). */
 const MAX_VIEWER_TOKENS = 1000;
@@ -21,6 +23,7 @@ const MAX_PENDING_REMOTES = 10;
  * @typedef {object} StoredPdf
  * @property {string} file          Random on-disk name (`<hex>.pdf`) inside the upload dir.
  * @property {string} originalName  Name the presenter uploaded, for display only.
+ * @property {boolean} [converted]  True when the PDF was converted from a PowerPoint file.
  * @property {number} size          Size in bytes.
  */
 
@@ -48,9 +51,24 @@ const MAX_PENDING_REMOTES = 10;
  * @property {Set<string>} blockedDevices   Device IDs that may not request access.
  * @property {boolean} remoteRequestsEnabled
  * @property {Set<string>} viewerTokens     Tokens issued after a correct password.
+ * @property {AnnotationBoard} annotations  Pen / highlighter strokes per slide.
+ * @property {ViewEffect} effect             Zoom or spotlight shown on every screen.
+ * @property {import("./polls").Poll|null} poll
+ * @property {boolean} allowDownload        Whether viewers may download the PDF.
  * @property {number} createdAt
  * @property {number} lastActivityAt
  */
+
+/**
+ * @typedef {object} ViewEffect
+ * @property {"none"|"spotlight"|"zoom"} mode
+ * @property {number} x     Focus point in [0, 1].
+ * @property {number} y
+ * @property {number} zoom  Magnification for "zoom" (1–5).
+ */
+
+/** @returns {ViewEffect} */
+const noEffect = () => ({ mode: "none", x: 0.5, y: 0.5, zoom: 1 });
 
 class SessionStore {
   /**
@@ -102,6 +120,10 @@ class SessionStore {
       blockedDevices: new Set(),
       remoteRequestsEnabled: true,
       viewerTokens: new Set(),
+      annotations: new AnnotationBoard(),
+      effect: noEffect(),
+      poll: null,
+      allowDownload: false,
       createdAt: now,
       lastActivityAt: now,
     };
@@ -150,6 +172,8 @@ class SessionStore {
     session.pdf = pdf;
     session.currentSlide = 1;
     session.totalSlides = 0;
+    session.annotations.reset();
+    session.effect = noEffect();
     this.fileIndex.set(pdf.file, session.id);
     this.touch(session);
   }
@@ -216,7 +240,7 @@ class SessionStore {
       return;
     }
     const removals = entries
-      .filter((name) => name.toLowerCase().endsWith(".pdf"))
+      .filter((name) => /\.(pdf|pptx?|ppsx?|odp)$/i.test(name))
       .map((name) => this.#unlink(name));
     await Promise.all(removals);
     if (removals.length) this.logger.info(`Removed ${removals.length} orphaned upload(s)`);
@@ -250,12 +274,16 @@ function toPublicState(session) {
       ? {
           url: `/uploads/${session.pdf.file}?t=${session.accessToken}`,
           name: session.pdf.originalName,
+          converted: Boolean(session.pdf.converted),
         }
       : null,
+    effect: session.effect,
+    poll: publicPoll(session.poll),
+    allowDownload: session.allowDownload,
     viewerCount: session.viewers.size,
     remoteCount: session.remotes.size,
     presenterOnline: Boolean(session.presenterSocketId),
   };
 }
 
-module.exports = { SessionStore, toPublicState, MAX_PENDING_REMOTES };
+module.exports = { SessionStore, toPublicState, noEffect, MAX_PENDING_REMOTES };

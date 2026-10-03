@@ -12,6 +12,7 @@
  */
 
 const fs = require("node:fs");
+const path = require("node:path");
 const express = require("express");
 const multer = require("multer");
 const { rateLimit } = require("express-rate-limit");
@@ -30,6 +31,7 @@ const {
   PASSWORD_MAX_LENGTH,
 } = require("./security");
 const { toPublicState } = require("./session-store");
+const { officeExtension, hasOfficeSignature } = require("./converter");
 const { lanAddresses } = require("./network");
 
 /** Content Security Policy: no inline scripts, no third-party origins. */
@@ -99,6 +101,18 @@ async function hasPdfHeader(filePath) {
   }
 }
 
+/** Download name of a session PDF: the uploaded name, with a `.pdf` extension. */
+function downloadName(originalName) {
+  const base = String(originalName || "Presentation").replace(/\.[^.]+$/, "") || "Presentation";
+  return `${base}.pdf`;
+}
+
+/** `attachment` header with an ASCII fallback and the UTF-8 name (RFC 6266 / 5987). */
+function contentDisposition(filename) {
+  const ascii = filename.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+}
+
 /**
  * Registers middleware and routes on an Express app.
  *
@@ -107,10 +121,11 @@ async function hasPdfHeader(filePath) {
  * @param {ReturnType<import("./config").loadConfig>} deps.config
  * @param {import("./session-store").SessionStore} deps.store
  * @param {import("./likes-store").LikesStore} deps.likes
+ * @param {import("./converter").OfficeConverter} deps.converter
  * @param {{ announcePdf: (session: import("./session-store").Session) => void }} deps.realtime
  * @param {import("./logger").Logger} deps.logger
  */
-function registerHttp(app, { config, store, likes, realtime, logger }) {
+function registerHttp(app, { config, store, likes, converter, realtime, logger }) {
   app.disable("x-powered-by");
   app.set("trust proxy", config.trustProxy);
   app.use(securityHeaders);
@@ -120,9 +135,12 @@ function registerHttp(app, { config, store, likes, realtime, logger }) {
     express.static(config.publicDir, {
       extensions: ["html"],
       setHeaders(res, filePath) {
-        // HTML must always be revalidated so deployments take effect at once;
-        // assets may be cached briefly.
-        res.setHeader("Cache-Control", filePath.endsWith(".html") ? "no-cache" : "public, max-age=3600");
+        // App code (HTML, scripts, styles, service worker) is always revalidated
+        // (cheap with ETags) so deployments take effect at once; vendor
+        // libraries, fonts and images may be cached briefly.
+        const isVendor = filePath.includes(`${path.sep}vendor${path.sep}`);
+        const revalidate = !isVendor && /\.(html|js|css|webmanifest)$/.test(filePath);
+        res.setHeader("Cache-Control", revalidate ? "no-cache" : "public, max-age=3600");
       },
     }),
   );
@@ -182,14 +200,20 @@ function registerHttp(app, { config, store, likes, realtime, logger }) {
     storage: multer.diskStorage({
       destination: config.uploadDir,
       // Never trust the client's name on disk: random name, fixed extension.
-      filename: (_req, _file, cb) => cb(null, `${randomToken(16)}.pdf`),
+      filename: (_req, file, cb) => cb(null, `${randomToken(16)}${officeExtension(file.originalname) || ".pdf"}`),
     }),
     defParamCharset: "utf8", // keeps non-Latin (e.g. Arabic) file names intact
     limits: { fileSize: config.maxUploadBytes, files: 1, fields: 2, parts: 3 },
     fileFilter: (_req, file, cb) => {
-      const looksLikePdf =
-        file.mimetype === "application/pdf" || file.originalname.toLowerCase().endsWith(".pdf");
-      cb(looksLikePdf ? null : new HttpError(415, "Only PDF files are allowed", "NOT_PDF"), looksLikePdf);
+      const name = file.originalname.toLowerCase();
+      const accepted =
+        name.endsWith(".pdf") ||
+        (converter.available && officeExtension(name) !== "") ||
+        (file.mimetype === "application/pdf" && !officeExtension(name));
+      const message = converter.available
+        ? "Only PDF and PowerPoint files are allowed"
+        : "Only PDF files are allowed on this server";
+      cb(accepted ? null : new HttpError(415, message, "NOT_PDF"), accepted);
     },
   });
 
@@ -197,6 +221,15 @@ function registerHttp(app, { config, store, likes, realtime, logger }) {
 
   app.get("/health", (_req, res) => {
     res.json({ status: "ok", sessions: store.size, uptime: Math.round(process.uptime()) });
+  });
+
+  /** What this server can do, so the presenter page can adapt its upload hints. */
+  app.get("/api/capabilities", (_req, res) => {
+    res.json({
+      formats: [".pdf", ...converter.formats],
+      officeConversion: converter.available,
+      maxUploadBytes: config.maxUploadBytes,
+    });
   });
 
   /** Creates a session. Body: `{ name?: string, password?: string }`. */
@@ -259,7 +292,43 @@ function registerHttp(app, { config, store, likes, realtime, logger }) {
     }),
   );
 
-  /** Uploads (or replaces) the session's PDF. Multipart field: `pdf`. */
+  /**
+   * Turns an uploaded file into a stored PDF: checks its signature and, for
+   * PowerPoint files, converts it. The source file is always removed.
+   * @returns {Promise<{ file: string, converted: boolean }>} Stored PDF name.
+   */
+  async function storeUpload(file) {
+    const ext = officeExtension(file.originalname);
+    if (!ext) {
+      const isPdf = await hasPdfHeader(file.path).catch(() => false);
+      if (!isPdf) throw new HttpError(415, "The file is not a valid PDF", "NOT_PDF");
+      return { file: file.filename, converted: false };
+    }
+
+    const valid = await hasOfficeSignature(file.path, ext).catch(() => false);
+    if (!valid) throw new HttpError(415, "The file is not a valid PowerPoint presentation", "NOT_OFFICE");
+    const pdfName = `${randomToken(16)}.pdf`;
+    const pdfPath = store.filePath(pdfName);
+    const started = Date.now();
+    try {
+      await converter.convert(file.path, pdfPath);
+    } catch (err) {
+      await fs.promises.unlink(pdfPath).catch(() => {});
+      if (err.code === "BUSY") throw new HttpError(503, "The server is busy converting other files, try again shortly", "BUSY");
+      logger.warn(`Conversion failed: ${err.message}`);
+      throw new HttpError(422, "Could not convert this presentation to PDF", "CONVERSION_FAILED");
+    } finally {
+      await fs.promises.unlink(file.path).catch(() => {});
+    }
+    if (!(await hasPdfHeader(pdfPath).catch(() => false))) {
+      await fs.promises.unlink(pdfPath).catch(() => {});
+      throw new HttpError(422, "Could not convert this presentation to PDF", "CONVERSION_FAILED");
+    }
+    logger.info(`Converted ${ext} to PDF in ${((Date.now() - started) / 1000).toFixed(1)} s`);
+    return { file: pdfName, converted: true };
+  }
+
+  /** Uploads (or replaces) the session's PDF. Multipart field: `pdf` (PDF or PowerPoint). */
   app.post(
     "/api/upload/:sessionId",
     requireXhr,
@@ -272,18 +341,24 @@ function registerHttp(app, { config, store, likes, realtime, logger }) {
       const { file } = req;
       if (!file) throw new HttpError(400, "No PDF uploaded", "NO_FILE");
 
-      const isPdf = await hasPdfHeader(file.path).catch(() => false);
-      // The session may have ended while the upload was streaming.
-      if (!isPdf || store.get(session.id) !== session) {
+      let stored;
+      try {
+        stored = await storeUpload(file);
+      } catch (err) {
         await fs.promises.unlink(file.path).catch(() => {});
-        if (!isPdf) throw new HttpError(415, "The file is not a valid PDF", "NOT_PDF");
+        throw err;
+      }
+      // The session may have ended while the upload was streaming or converting.
+      if (store.get(session.id) !== session) {
+        await fs.promises.unlink(store.filePath(stored.file)).catch(() => {});
         throw new HttpError(404, "Session not found", "SESSION_NOT_FOUND");
       }
 
       store.setPdf(session, {
-        file: file.filename,
+        file: stored.file,
         originalName: sanitizeOriginalFilename(file.originalname),
         size: file.size,
+        converted: stored.converted,
       });
       logger.info(`Session ${session.id}: PDF uploaded (${(file.size / 1024 / 1024).toFixed(1)} MB)`);
 
@@ -319,8 +394,13 @@ function registerHttp(app, { config, store, likes, realtime, logger }) {
     if (!session || !safeEqual(req.query.t, session.accessToken)) {
       return next(new HttpError(404, "File not found", "NOT_FOUND"));
     }
+    const headers = { "Content-Type": "application/pdf" };
+    if (req.query.download === "1") {
+      if (!session.allowDownload) return next(new HttpError(403, "Downloads are disabled", "FORBIDDEN"));
+      headers["Content-Disposition"] = contentDisposition(downloadName(session.pdf.originalName));
+    }
     res.setHeader("Cache-Control", "private, max-age=600");
-    res.sendFile(store.filePath(file), { headers: { "Content-Type": "application/pdf" } }, (err) => {
+    res.sendFile(store.filePath(file), { headers }, (err) => {
       if (err && !res.headersSent) next(new HttpError(404, "File not found", "NOT_FOUND"));
     });
   });

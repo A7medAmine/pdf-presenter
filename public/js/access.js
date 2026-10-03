@@ -8,7 +8,8 @@
  * Licensed under the Apache License, Version 2.0.
  */
 
-import { $, api, icons, applySavedTheme } from "./lib/common.js";
+import { $, api, icons, applySavedTheme, setupPwa } from "./lib/common.js";
+import { t, bindLangToggles, onLangChange } from "./lib/i18n.js";
 
 applySavedTheme();
 
@@ -28,11 +29,11 @@ let sessions = [];
 
 function formatTimeAgo(timestamp) {
   const minutes = Math.floor((Date.now() - timestamp) / 60_000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 1) return t("justNow");
+  if (minutes < 60) return t("minutesAgo", { count: minutes });
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ${minutes % 60}m ago`;
-  return `${Math.floor(hours / 24)}d ago`;
+  if (hours < 24) return t("hoursAgo", { count: hours });
+  return t("daysAgo", { count: Math.floor(hours / 24) });
 }
 
 function filteredSessions() {
@@ -76,7 +77,7 @@ function renderSession(s) {
   if (s.hasPassword) {
     const lock = el("span", "session-lock");
     lock.innerHTML = icons.lock;
-    lock.title = "Password required";
+    lock.title = t("passwordRequiredShort");
     name.append(" ", lock);
   }
   info.append(name);
@@ -84,16 +85,16 @@ function renderSession(s) {
   const meta = el("div", "session-meta");
   meta.append(
     withIcon("session-time", icons.clock, formatTimeAgo(s.createdAt)),
-    el("span", "session-viewers", `${s.viewerCount} viewer${s.viewerCount === 1 ? "" : "s"}`),
+    el("span", "session-viewers", t("viewerCount", { count: s.viewerCount })),
     el(
       "span",
       `session-state ${s.presenterOnline ? "online" : "offline"}`,
-      !s.presenterOnline ? "Presenter offline" : s.hasPdf ? "Live" : "Waiting for slides",
+      !s.presenterOnline ? t("presenterOfflineShort") : s.hasPdf ? t("live") : t("waitingForSlides"),
     ),
   );
 
   const actions = el("div", "action-buttons");
-  const link = el("a", "btn btn-sm", s.hasPassword ? "View (password required)" : "View");
+  const link = el("a", "btn btn-sm", s.hasPassword ? t("viewWithPassword") : t("view"));
   link.href = `/viewer.html?session=${encodeURIComponent(s.id)}`;
   actions.append(link);
 
@@ -103,19 +104,19 @@ function renderSession(s) {
 
 function render() {
   if (!sessions.length) {
-    dom.list.replaceChildren(el("div", "no-sessions", "No active sessions. Start a presentation first."));
+    dom.list.replaceChildren(el("div", "no-sessions", t("noSessions")));
     return;
   }
   const visible = filteredSessions();
   dom.list.replaceChildren(
-    ...(visible.length ? visible.map(renderSession) : [el("div", "no-sessions", "No matching sessions.")]),
+    ...(visible.length ? visible.map(renderSession) : [el("div", "no-sessions", t("noMatchingSessions"))]),
   );
 }
 
 async function fetchSessions() {
   const { ok, data } = await api("/api/sessions");
   if (!ok) {
-    dom.list.replaceChildren(el("div", "no-sessions", "Could not load sessions. Is the server running?"));
+    dom.list.replaceChildren(el("div", "no-sessions", t("sessionsLoadFailed")));
     return;
   }
   sessions = data.sessions || [];
@@ -126,6 +127,10 @@ dom.search.addEventListener("input", render);
 dom.sort.addEventListener("change", render);
 dom.timeFilter.addEventListener("change", render);
 dom.refresh.addEventListener("click", fetchSessions);
+
+bindLangToggles($("accessLang"));
+onLangChange(render);
+setupPwa();
 
 fetchSessions();
 setInterval(() => {

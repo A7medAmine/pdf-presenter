@@ -7,6 +7,8 @@
  * Licensed under the Apache License, Version 2.0.
  */
 
+import { t } from "./i18n.js";
+
 /** Session IDs are 16 characters from an unambiguous alphabet. */
 export const SESSION_ID_PATTERN = /^[A-Z0-9]{16}$/;
 
@@ -34,6 +36,20 @@ export const icons = {
   eye: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
   eyeOff:
     '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>',
+  pen: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>',
+  highlighter:
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 11l-6 6v3h9l3-3"/><path d="M22 12l-4.6 4.6a2 2 0 01-2.8 0l-5.2-5.2a2 2 0 010-2.8L14 4"/></svg>',
+  pointer:
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/></svg>',
+  spotlight:
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>',
+  zoom: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35M11 8v6M8 11h6"/></svg>',
+  undo: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 00-15-6.7L3 13"/></svg>',
+  trash:
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/></svg>',
+  hand: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 11V6a2 2 0 00-4 0v5M14 10V4a2 2 0 00-4 0v6M10 10.5V6a2 2 0 00-4 0v8a8 8 0 0016 0v-3a2 2 0 00-4 0"/></svg>',
+  download:
+    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>',
   swap: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>',
 };
 
@@ -118,7 +134,7 @@ export async function api(path, { method = "GET", body, headers = {} } = {}) {
     const data = await res.json().catch(() => ({}));
     return { ok: res.ok, status: res.status, data };
   } catch {
-    return { ok: false, status: 0, data: { error: "Network error — is the server running?" } };
+    return { ok: false, status: 0, data: { error: t("networkError") } };
   }
 }
 
@@ -130,7 +146,7 @@ export async function request(socket, event, payload = {}, timeoutMs = 8000) {
   try {
     return await socket.timeout(timeoutMs).emitWithAck(event, payload);
   } catch {
-    return { ok: false, code: "TIMEOUT", message: "The server did not respond" };
+    return { ok: false, code: "TIMEOUT", message: t("serverTimeout") };
   }
 }
 
@@ -267,6 +283,72 @@ export async function exitFullscreen() {
 export function onFullscreenChange(listener) {
   document.addEventListener("fullscreenchange", listener);
   document.addEventListener("webkitfullscreenchange", listener);
+}
+
+// ─── Haptics ──────────────────────────────────────────────────────────────────
+
+/** Short vibration feedback on phones that support it (ignored elsewhere). */
+export function haptic(pattern = 10) {
+  try {
+    navigator.vibrate?.(pattern);
+  } catch {
+    /* not allowed */
+  }
+}
+
+// ─── Progressive web app ──────────────────────────────────────────────────────
+
+let installPrompt = null;
+const installButtons = new Set();
+
+/**
+ * Registers the service worker and wires "Install app" buttons, which only
+ * become visible when the browser offers installation.
+ * @param {...HTMLElement} buttons
+ */
+export function setupPwa(...buttons) {
+  if ("serviceWorker" in navigator && window.isSecureContext) {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  }
+  for (const button of buttons.filter(Boolean)) {
+    installButtons.add(button);
+    button.hidden = !installPrompt;
+    button.addEventListener("click", async () => {
+      if (!installPrompt) return;
+      installPrompt.prompt();
+      await installPrompt.userChoice.catch(() => null);
+      installPrompt = null;
+      for (const b of installButtons) b.hidden = true;
+    });
+  }
+}
+
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault();
+  installPrompt = e;
+  for (const button of installButtons) button.hidden = false;
+});
+window.addEventListener("appinstalled", () => {
+  installPrompt = null;
+  for (const button of installButtons) button.hidden = true;
+});
+
+/** Saves a Blob as a file. */
+export function saveBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** Human-readable file size. */
+export function formatBytes(bytes) {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 // ─── Screen wake lock ─────────────────────────────────────────────────────────

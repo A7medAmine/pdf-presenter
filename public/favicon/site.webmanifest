@@ -1,14 +1,20 @@
 {
+  "id": "/",
   "name": "PDF Presenter",
   "short_name": "Presenter",
-  "description": "Present PDF slides and control them from any device.",
+  "description": "Present PDF and PowerPoint slides and control them from any device.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
+  "orientation": "any",
   "theme_color": "#0e0e12",
   "background_color": "#0e0e12",
   "icons": [
-    { "src": "/favicon/android-chrome-192x192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "/favicon/android-chrome-512x512.png", "sizes": "512x512", "type": "image/png" }
+    { "src": "/favicon/android-chrome-192x192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/favicon/android-chrome-512x512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ],
+  "shortcuts": [
+    { "name": "Remote control", "short_name": "Remote", "url": "/remote.html" },
+    { "name": "Join as viewer", "short_name": "Viewer", "url": "/access.html" }
   ]
 }

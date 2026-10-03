@@ -1,8 +1,9 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="dark" data-title-key="presenterTitle">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0e0e12" />
     <title>PDF Presenter</title>
     <link rel="stylesheet" href="/css/style.css" />
     <link rel="preload" href="/fonts/Amiri-Regular.ttf" as="font" type="font/ttf" crossorigin />
@@ -22,161 +23,168 @@
     <!-- ── Top Bar ─────────────────────────────────────────────────── -->
     <header class="topbar" id="topbar">
       <div class="topbar-left">
-        <span class="logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;"><path d="M12 2l8.66 5v10L12 22l-8.66-5V7L12 2z"/></svg> Presenter</span>
-        <button type="button" class="session-name-display" id="sessionNameDisplay" title="Click to rename the session" hidden>Untitled Session</button>
-        <span class="session-badge" id="sessionBadge" title="Session ID"
-          >—</span
-        >
+        <span class="logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-inline-end: 6px;"><path d="M12 2l8.66 5v10L12 22l-8.66-5V7L12 2z"/></svg> <span data-i18n="presenterLogo">Presenter</span></span>
+        <button type="button" class="session-name-display" id="sessionNameDisplay" dir="auto" data-i18n-title="renameHint" title="Click to rename the session" hidden>Untitled Session</button>
+        <span class="session-badge" id="sessionBadge" data-i18n-title="sessionId" title="Session ID" dir="ltr">—</span>
       </div>
       <div class="topbar-center">
-        <span class="slide-counter" id="slideCounter">— / —</span>
+        <span class="slide-counter" id="slideCounter" dir="ltr">— / —</span>
       </div>
       <div class="topbar-right">
-        <!-- Change PDF button — only visible once a PDF is loaded (toggled via JS) -->
-        <button
-          class="btn btn-secondary"
-          id="changePdfBtn"
-          title="Switch to a different PDF"
-          hidden
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
-          Change PDF
+        <button class="btn btn-secondary" id="changePdfBtn" data-i18n-title="changePdfHint" title="Switch to a different file" hidden>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-inline-end: 6px;"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+          <span data-i18n="changePdf">Change file</span>
         </button>
-        <button class="btn-icon" id="themeToggle" title="Toggle theme">
+        <button class="btn btn-secondary" id="pollBtn" data-i18n-title="pollHeading" title="Audience poll" disabled>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-inline-end: 6px;"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>
+          <span data-i18n="poll">Poll</span>
+        </button>
+        <button class="btn-icon lang-toggle" id="langToggle">ع</button>
+        <button class="btn-icon" id="themeToggle" data-i18n-title="toggleTheme" title="Toggle theme">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72l1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
         </button>
-        <button class="btn-icon" id="fullscreenBtn" title="Fullscreen (F)">
+        <button class="btn-icon" id="fullscreenBtn" data-i18n-title="fullscreenKey" title="Fullscreen (F)">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg>
         </button>
-        <button
-          class="btn btn-secondary"
-          id="showRemoteBtn"
-          title="Show remote QR"
-          disabled
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;"><rect x="6" y="2" width="12" height="20" rx="2" ry="2"/><circle cx="12" cy="7" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="17" r="1"/><line x1="8" y1="6" x2="10" y2="6"/><line x1="8" y1="11" x2="10" y2="11"/><line x1="8" y1="16" x2="10" y2="16"/></svg>
-          Remote
+        <button class="btn btn-secondary" id="showRemoteBtn" data-i18n-title="showRemoteQr" title="Show remote QR" disabled>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-inline-end: 6px;"><rect x="6" y="2" width="12" height="20" rx="2" ry="2"/><circle cx="12" cy="7" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="17" r="1"/></svg>
+          <span data-i18n="remote">Remote</span>
         </button>
-        <button
-          class="btn btn-secondary"
-          id="showViewerBtn"
-          title="Show viewer QR"
-          disabled
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-          Viewer
+        <button class="btn btn-secondary" id="showViewerBtn" data-i18n-title="showViewerQr" title="Show viewer QR" disabled>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-inline-end: 6px;"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          <span data-i18n="viewer">Viewer</span>
         </button>
-        <button
-          class="btn btn-danger"
-          id="endSessionBtn"
-          title="End Session"
-          style="margin-left: 8px;"
-          hidden
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;"><path d="M18 6L6 18M6 6l12 12"/></svg>
-          End
+        <button class="btn btn-danger" id="endSessionBtn" data-i18n-title="endSession" title="End Session" style="margin-inline-start: 8px;" hidden>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-inline-end: 6px;"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          <span data-i18n="end">End</span>
         </button>
       </div>
     </header>
 
-    <!-- ── Setup Panel (shown before PDF is loaded, and when swapping) ─ -->
+    <!-- ── Setup Panel (shown before a file is loaded, and when swapping) ─ -->
     <div class="setup-overlay" id="setupOverlay" data-mode="loading">
       <div class="setup-card">
         <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
           <div class="setup-logo"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l8.66 5v10L12 22l-8.66-5V7L12 2z"/></svg></div>
-          <button class="btn-icon" id="setupThemeToggle" title="Toggle theme" style="flex-shrink: 0;">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72l1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
-          </button>
-        </div>
-        <h1 id="setupTitle">PDF Presenter</h1>
-        <p class="setup-sub" id="setupSubtitle">
-          Upload a PDF and start presenting. Control slides from any device.
-        </p>
-
-        <div id="createSection" hidden>
-        <!-- Session Name Input -->
-        <div class="session-name-input" style="margin-bottom: 12px;">
-          <label for="sessionNameInput" style="display: block; color: var(--text-2); font-size: 0.85rem; margin-bottom: 6px;">Session name</label>
-          <input type="text" id="sessionNameInput" placeholder="Session XXXX" maxlength="60" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-1); color: var(--text); font-size: 1rem;" />
-        </div>
-
-        <!-- Session Password Input (Optional) -->
-        <div class="session-password-input" style="margin-bottom: 20px;">
-          <label for="sessionPasswordInput" style="display: block; color: var(--text-2); font-size: 0.85rem; margin-bottom: 6px;">
-            Viewer password <span style="color: var(--text-3); font-weight: normal;">(optional)</span>
-          </label>
-          <div class="password-input-wrapper" style="position: relative;">
-            <input type="password" id="sessionPasswordInput" placeholder="Leave empty for public access" maxlength="32" style="width: 100%; padding: 10px 40px 10px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-1); color: var(--text); font-size: 1rem;" />
-            <button type="button" id="toggleSessionPassword" class="password-toggle-btn" style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: transparent; border: none; cursor: pointer; padding: 4px; color: var(--text-2);" title="Show password">
-              <svg class="eye-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          <div style="display: flex; gap: 6px;">
+            <button class="btn-icon lang-toggle" id="setupLangToggle">ع</button>
+            <button class="btn-icon" id="setupThemeToggle" data-i18n-title="toggleTheme" title="Toggle theme" style="flex-shrink: 0;">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72l1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
             </button>
           </div>
-          <span style="display: block; color: var(--text-3); font-size: 0.75rem; margin-top: 4px;">Min 4 characters. Viewers will need this password to join.</span>
+        </div>
+        <h1 id="setupTitle">PDF Presenter</h1>
+        <p class="setup-sub" id="setupSubtitle"></p>
+
+        <div id="createSection" hidden>
+          <div class="session-name-input" style="margin-bottom: 12px;">
+            <label for="sessionNameInput" class="field-label" data-i18n="sessionName">Session name</label>
+            <input type="text" id="sessionNameInput" class="field-input" placeholder="Session XXXX" maxlength="60" />
+          </div>
+
+          <div class="session-password-input" style="margin-bottom: 20px;">
+            <label for="sessionPasswordInput" class="field-label">
+              <span data-i18n="viewerPassword">Viewer password</span> <span style="color: var(--text-3); font-weight: normal;" data-i18n="optional">(optional)</span>
+            </label>
+            <div class="password-input-wrapper" style="position: relative;">
+              <input type="password" id="sessionPasswordInput" class="field-input" data-i18n-placeholder="passwordEmptyHint" placeholder="Leave empty for public access" maxlength="32" style="padding-inline-end: 40px;" />
+              <button type="button" id="toggleSessionPassword" class="password-toggle-btn" style="position: absolute; inset-inline-end: 8px; top: 50%; transform: translateY(-50%); background: transparent; border: none; cursor: pointer; padding: 4px; color: var(--text-2);" data-i18n-title="showPassword" title="Show password">
+                <svg class="eye-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
+            </div>
+            <span style="display: block; color: var(--text-3); font-size: 0.75rem; margin-top: 4px;" data-i18n="passwordHelp">Min 4 characters. Viewers will need this password to join.</span>
+          </div>
+
+          <button id="startSessionBtn" class="btn btn-primary" style="width: 100%; margin-bottom: 20px;" data-i18n="startSession">Start Session</button>
         </div>
 
-        <!-- Start Session Button -->
-        <button id="startSessionBtn" class="btn btn-primary" style="width: 100%; margin-bottom: 20px;">
-          Start Session
-        </button>
-        </div>
-
-        <div class="upload-zone" id="uploadZone" tabindex="0" role="button" aria-label="Choose a PDF to upload" hidden>
+        <div class="upload-zone" id="uploadZone" tabindex="0" role="button" data-i18n-aria="chooseFile" aria-label="Choose a file to upload" hidden>
           <input type="file" id="fileInput" accept="application/pdf,.pdf" hidden />
           <div class="upload-icon">📄</div>
           <p>
-            Drop PDF here or
-            <label for="fileInput" class="upload-link">browse</label>
+            <span data-i18n="dropHere">Drop your file here or</span>
+            <label for="fileInput" class="upload-link" data-i18n="browse">browse</label>
           </p>
-          <span class="upload-hint">PDF files only · one file at a time</span>
+          <span class="upload-hint" id="uploadHint"></span>
         </div>
 
         <div class="upload-progress" id="uploadProgress" hidden>
           <div class="progress-bar">
             <div class="progress-fill" id="progressFill"></div>
           </div>
-          <span id="progressLabel">Uploading…</span>
+          <span id="progressLabel"></span>
         </div>
-        <button type="button" class="btn swap-cancel-btn" id="swapCancelBtn" hidden>Cancel</button>
+
+        <section class="library" id="librarySection" hidden>
+          <div class="library-head">
+            <h2 data-i18n="libraryHeading">Your recent presentations</h2>
+            <label class="library-remember"><input type="checkbox" id="rememberDecks" checked /> <span data-i18n="rememberDecks">Remember in this browser</span></label>
+          </div>
+          <ul class="library-list" id="libraryList"></ul>
+          <p class="library-note" data-i18n="libraryNote">Stored only in this browser — never on the server.</p>
+        </section>
+
+        <button type="button" class="btn swap-cancel-btn" id="swapCancelBtn" hidden data-i18n="cancel">Cancel</button>
         <footer class="setup-footer">
-          <a href="https://github.com/A7medAmine/pdf-presenter" target="_blank" rel="noopener noreferrer" class="footer-link">
+          <a href="https://github.com/A7medAmine/pdf-presenter" target="_blank" rel="noopener noreferrer" class="footer-link" dir="ltr">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="vertical-align: middle; margin-right: 6px;"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
             A7medAmine/pdf-presenter
           </a>
           <span class="footer-separator">·</span>
           <span class="footer-license">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 4px;"><path d="M9 12l2 2 4-4M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9c1.2 0 2.35.24 3.4.67"/></svg>
-            Apache-2.0 License
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-inline-end: 4px;"><path d="M9 12l2 2 4-4M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9c1.2 0 2.35.24 3.4.67"/></svg>
+            <span data-i18n="license">Apache-2.0 License</span>
           </span>
           <span class="footer-separator">·</span>
-          <button type="button" class="footer-like-btn" id="likeBtn" title="Like this app" aria-pressed="false">
+          <button type="button" class="footer-like-btn" id="likeBtn" data-i18n-title="likeApp" title="Like this app" aria-pressed="false">
             <svg class="like-heart" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
             </svg>
             <span class="like-count" id="likeCount">0</span>
           </button>
+          <button type="button" class="footer-like-btn" id="installBtn" hidden data-i18n="installApp">Install app</button>
         </footer>
       </div>
     </div>
 
     <!-- ── Slide Canvas Area ───────────────────────────────────────── -->
-    <main class="slide-area" id="slideArea">
+    <main class="slide-area" id="slideArea" dir="ltr">
       <div class="slide-wrapper" id="slideWrapper">
-        <canvas id="slideCanvas"></canvas>
-        <!-- Clickable areas for links embedded in the PDF -->
-        <div class="link-layer" id="linkLayer"></div>
-        <!-- Artificial cursor for remote control -->
-        <div class="artificial-cursor" id="artificialCursor"></div>
+        <div class="zoom-layer" id="zoomLayer">
+          <canvas id="slideCanvas"></canvas>
+          <!-- Clickable areas for links embedded in the PDF -->
+          <div class="link-layer" id="linkLayer"></div>
+          <canvas class="annotation-layer" id="inkCanvas"></canvas>
+          <!-- Artificial cursor for remote control -->
+          <div class="artificial-cursor" id="artificialCursor"></div>
+        </div>
+        <div class="spotlight-layer" id="spotlightLayer"></div>
         <!-- Transition overlay -->
         <div class="transition-overlay" id="transitionOverlay"></div>
       </div>
 
+      <!-- Poll results shown to the room -->
+      <aside class="poll-overlay presenter-poll" id="pollOverlay" hidden>
+        <div id="pollOverlayBody"></div>
+        <div class="poll-actions">
+          <button type="button" class="btn btn-sm" id="pollCloseBtn" data-i18n="closePoll">Close voting</button>
+          <button type="button" class="btn btn-sm" id="pollHideBtn" data-i18n="hidePoll">Hide</button>
+          <button type="button" class="btn btn-sm btn-danger" id="pollClearBtn" data-i18n="removePoll">Remove poll</button>
+        </div>
+      </aside>
+
+      <!-- Drawing tools -->
+      <div class="draw-toolbar" id="drawToolbar" role="toolbar" data-i18n-aria="tools" hidden>
+        <button type="button" class="draw-tool" data-tool="pen" data-i18n-title="penKey" title="Pen (P)"></button>
+        <button type="button" class="draw-tool" data-tool="highlighter" data-i18n-title="highlighterKey" title="Highlighter (H)"></button>
+        <div class="color-swatches vertical" id="drawColors"></div>
+        <button type="button" class="draw-tool" id="drawUndo" data-i18n-title="undoKey" title="Undo (Ctrl+Z)"></button>
+        <button type="button" class="draw-tool" id="drawClear" data-i18n-title="clearSlide" title="Clear slide"></button>
+      </div>
+
       <!-- Navigation arrows -->
-      <button type="button" class="nav-btn nav-prev" id="prevBtn" title="Previous (←)" aria-label="Previous slide">
-        &#8249;
-      </button>
-      <button type="button" class="nav-btn nav-next" id="nextBtn" title="Next (→)" aria-label="Next slide">
-        &#8250;
-      </button>
+      <button type="button" class="nav-btn nav-prev" id="prevBtn" data-i18n-title="previousKey" data-i18n-aria="previousSlide" title="Previous (←)" aria-label="Previous slide">&#8249;</button>
+      <button type="button" class="nav-btn nav-next" id="nextBtn" data-i18n-title="nextKey" data-i18n-aria="nextSlideAria" title="Next (→)" aria-label="Next slide">&#8250;</button>
 
       <!-- Slide strip (thumbnail bar) -->
       <div class="slide-strip" id="slideStrip"></div>
@@ -185,99 +193,113 @@
     <!-- ── Remote Control Modal ────────────────────────────────────── -->
     <div class="modal-backdrop" id="remoteModal" role="dialog" aria-modal="true" aria-labelledby="remoteModalTitle" hidden>
       <div class="modal-card">
-        <button type="button" class="modal-close" id="closeRemoteModal" aria-label="Close">
+        <button type="button" class="modal-close" id="closeRemoteModal" data-i18n-aria="close" aria-label="Close">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
-        <h2 id="remoteModalTitle">Remote Control</h2>
-        <p class="modal-sub">Scan with your phone to control slides</p>
+        <h2 id="remoteModalTitle" data-i18n="remoteHeading">Remote Control</h2>
+        <p class="modal-sub" data-i18n="remoteModalHint">Scan with your phone to control slides</p>
 
         <div class="ip-row">
-          <label class="ip-label" for="ipInput"
-            >Server address <span class="ip-hint">(as reachable from phones)</span></label
-          >
-          <div class="ip-input-group">
-            <input
-              type="text"
-              id="ipInput"
-              placeholder="e.g. 192.168.1.42"
-              spellcheck="false"
-              autocomplete="off"
-            />
-            <button class="btn btn-sm" id="applyIpBtn">Apply</button>
+          <label class="ip-label" for="ipInput"><span data-i18n="serverAddress">Server address</span> <span class="ip-hint" data-i18n="serverAddressHint">(as reachable from phones)</span></label>
+          <div class="ip-input-group" dir="ltr">
+            <input type="text" id="ipInput" data-i18n-placeholder="ipPlaceholder" placeholder="e.g. 192.168.1.42" spellcheck="false" autocomplete="off" />
+            <button class="btn btn-sm" id="applyIpBtn" data-i18n="apply">Apply</button>
           </div>
           <select id="ipSelector" class="ip-selector" hidden style="width: 100%; margin-top: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-1); color: var(--text); font-size: 0.85rem; cursor: pointer;"></select>
-          <p class="ip-note" id="ipNote">
-            Leave blank to use the address in your browser bar
-          </p>
+          <p class="ip-note" id="ipNote" data-i18n="ipNoteDefault">Leave blank to use the address in your browser bar</p>
         </div>
 
         <div class="qr-single">
           <canvas id="qrCanvas"></canvas>
-          <p class="qr-desc">Control slides from your phone</p>
+          <p class="qr-desc" data-i18n="remoteQrDesc">Control slides from your phone</p>
         </div>
-        <p class="remote-url" id="remoteUrlDisplay">—</p>
+        <p class="remote-url" id="remoteUrlDisplay" dir="ltr">—</p>
 
         <div class="remote-stats">
-          <span>Session: <strong id="modalSessionId">—</strong></span>
-          <span id="connectedCount">0 remotes connected</span>
+          <span><span data-i18n="sessionLabel">Session:</span> <strong id="modalSessionId" dir="ltr">—</strong></span>
+          <span id="connectedCount"></span>
         </div>
         <div class="modal-actions" style="display: flex; flex-direction: column; gap: 10px; margin-top: 16px; align-items: center;">
           <button type="button" class="btn btn-secondary" style="width: 100%; justify-content: center; display: inline-flex; align-items: center;" id="copyUrlBtn">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-            Copy Link
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-inline-end: 6px;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+            <span data-i18n="copyLink">Copy Link</span>
           </button>
           <button type="button" class="btn btn-danger" style="width: 100%; justify-content: center; display: inline-flex; align-items: center;" id="toggleRemoteRequestsBtn">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px;"><circle cx="12" cy="12" r="10"/><path d="M4.93 4.93l14.14 14.14"/></svg>
-            <span>Disable remote requests</span>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-inline-end: 6px;"><circle cx="12" cy="12" r="10"/><path d="M4.93 4.93l14.14 14.14"/></svg>
+            <span data-i18n="disableRemoteRequests">Disable remote requests</span>
           </button>
         </div>
-        <p class="remote-requests-hint" style="font-size: 0.75rem; color: var(--text-3); margin-top: 10px; text-align: center;">Stop accepting new remote control requests</p>
+        <p class="remote-requests-hint" style="font-size: 0.75rem; color: var(--text-3); margin-top: 10px; text-align: center;" data-i18n="remoteRequestsHint">Stop accepting new remote control requests</p>
       </div>
     </div>
 
     <!-- ── Viewer Modal ─────────────────────────────────────────────── -->
     <div class="modal-backdrop" id="viewerModal" role="dialog" aria-modal="true" aria-labelledby="viewerModalTitle" hidden>
       <div class="modal-card">
-        <button type="button" class="modal-close" id="closeViewerModal" aria-label="Close">
+        <button type="button" class="modal-close" id="closeViewerModal" data-i18n-aria="close" aria-label="Close">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
         <h2 id="viewerModalTitle">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 8px;"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-          Viewer
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-inline-end: 8px;"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          <span data-i18n="viewer">Viewer</span>
         </h2>
-        <p class="modal-sub">Scan with your phone to view slides only</p>
+        <p class="modal-sub" data-i18n="viewerModalHint">Scan with your phone to view slides only</p>
 
         <div class="orientation-row">
-          <label class="orientation-label">Presentation Orientation:</label>
+          <label class="orientation-label" data-i18n="orientation">Presentation orientation:</label>
           <div class="orientation-toggle">
             <button type="button" class="orientation-btn active" id="orientLandscape" data-orient="landscape" aria-pressed="true">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-              Landscape
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-inline-end: 6px;"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+              <span data-i18n="landscape">Landscape</span>
             </button>
             <button type="button" class="orientation-btn" id="orientPortrait" data-orient="portrait" aria-pressed="false">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12" y2="18.01"/></svg>
-              Portrait
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-inline-end: 6px;"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12" y2="18.01"/></svg>
+              <span data-i18n="portrait">Portrait</span>
             </button>
           </div>
-          <p class="orientation-hint">
-            Choose based on your PDF slide orientation for best viewing
-          </p>
+          <p class="orientation-hint" data-i18n="orientationHint">Choose based on your slide orientation for best viewing</p>
         </div>
+
+        <label class="toggle-row">
+          <input type="checkbox" id="allowDownloadToggle" />
+          <span>
+            <strong data-i18n="allowDownload">Let viewers download the PDF</strong>
+            <small data-i18n="allowDownloadHint">Adds a download button on their screens</small>
+          </span>
+        </label>
 
         <div class="qr-single">
           <canvas id="viewerQrCanvas"></canvas>
-          <p class="qr-desc">View slides on your phone (no control)</p>
+          <p class="qr-desc" data-i18n="viewerQrDesc">View slides on your phone (no control)</p>
         </div>
-        <p class="remote-url" id="viewerUrlDisplay">—</p>
+        <p class="remote-url" id="viewerUrlDisplay" dir="ltr">—</p>
 
         <div class="remote-stats">
-          <span>Session: <strong id="viewerModalSessionId">—</strong></span>
-          <span id="viewerCount">0 viewers connected</span>
+          <span><span data-i18n="sessionLabel">Session:</span> <strong id="viewerModalSessionId" dir="ltr">—</strong></span>
+          <span id="viewerCount"></span>
         </div>
         <button type="button" class="btn btn-secondary" id="copyViewerUrlBtn">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-          Copy Link
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-inline-end: 6px;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+          <span data-i18n="copyLink">Copy Link</span>
         </button>
+      </div>
+    </div>
+
+    <!-- ── Poll Modal ───────────────────────────────────────────────── -->
+    <div class="modal-backdrop" id="pollModal" role="dialog" aria-modal="true" aria-labelledby="pollModalTitle" hidden>
+      <div class="modal-card">
+        <button type="button" class="modal-close" data-i18n-aria="close" aria-label="Close">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
+        <h2 id="pollModalTitle" data-i18n="pollHeading">Audience poll</h2>
+        <p class="modal-sub" data-i18n="pollModalHint">Viewers vote from their phones; results appear on the slide.</p>
+        <div class="poll-form">
+          <label class="field-label" for="pollQuestion" data-i18n="pollQuestion">Question</label>
+          <input type="text" id="pollQuestion" class="field-input" maxlength="140" data-i18n-placeholder="pollQuestionPlaceholder" />
+          <label class="field-label" for="pollOptions" data-i18n="pollOptions">Options (one per line, 2–6)</label>
+          <textarea id="pollOptions" class="field-input" rows="5" data-i18n-placeholder="pollOptionsPlaceholder"></textarea>
+          <button type="button" class="btn btn-primary" id="pollStartBtn" data-i18n="startPoll">Start poll</button>
+        </div>
       </div>
     </div>
 
@@ -285,21 +307,20 @@
     <div class="remote-approval-dialog" id="remoteApprovalDialog" role="alertdialog" aria-labelledby="approvalTitle" hidden>
       <div class="remote-approval-content">
         <div class="remote-approval-header">
-          <h3 id="approvalTitle"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 8px;" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg> Remote Access Request</h3>
-          <button type="button" class="btn-close" id="dismissApprovalBtn" title="Hide for now" aria-label="Hide"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+          <h3 id="approvalTitle"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-inline-end: 8px;" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg> <span data-i18n="remoteRequestTitle">Remote Access Request</span></h3>
+          <button type="button" class="btn-close" id="dismissApprovalBtn" data-i18n-title="hideForNow" data-i18n-aria="hideForNow" title="Hide for now" aria-label="Hide"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
-        <p id="approvalCount">1 remote waiting</p>
+        <p id="approvalCount"></p>
         <p class="remote-id" id="approvalDevice">Device</p>
         <div class="remote-approval-buttons">
-          <button type="button" class="btn-approve" id="approveRemoteBtn">Accept</button>
-          <button type="button" class="btn-reject" id="rejectRemoteBtn">Reject</button>
-          <button type="button" class="btn-block" id="blockRemoteBtn" title="Reject and block this device">Block</button>
+          <button type="button" class="btn-approve" id="approveRemoteBtn" data-i18n="accept">Accept</button>
+          <button type="button" class="btn-reject" id="rejectRemoteBtn" data-i18n="reject">Reject</button>
+          <button type="button" class="btn-block" id="blockRemoteBtn" data-i18n-title="blockHint" title="Reject and block this device" data-i18n="block">Block</button>
         </div>
       </div>
     </div>
 
     <!-- ── Toast notification ─────────────────────────────────────── -->
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-
   </body>
 </html>
