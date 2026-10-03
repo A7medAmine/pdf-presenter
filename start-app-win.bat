@@ -22,16 +22,7 @@ if not exist "node_modules\" (
     exit /b 1
 )
 
-:: Get IP addresses
-set "IP=localhost"
-for /f "tokens=2 delims=:" %%a in ('ipconfig ^| findstr /C:"IPv4 Address"') do (
-    set "IP_TEMP=%%a"
-    set "IP=!IP_TEMP: =!"
-)
-
-echo The app will be available at:
-echo   - Local:    http://localhost:3000
-echo   - Network:  http://%IP%:3000
+echo The server prints its local and network URLs below.
 echo.
 echo Press Ctrl+C to stop the server
 echo.

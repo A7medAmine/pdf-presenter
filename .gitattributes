@@ -1,0 +1,12 @@
+# Normalize line endings in the repository.
+* text=auto
+*.sh text eol=lf
+*.bat text eol=crlf
+*.png binary
+*.ico binary
+*.ttf binary
+*.woff2 binary
+*.mp3 binary
+*.pfb binary
+*.bcmap binary
+*.pdf binary

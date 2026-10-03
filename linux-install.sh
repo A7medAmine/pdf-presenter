@@ -7,7 +7,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="PDF Presenter"
-NODE_VERSION="18"
+NODE_VERSION="22"
 
 echo "=========================================="
 echo "  $APP_NAME - Linux Installer"
@@ -102,11 +102,11 @@ install_node() {
 check_node() {
     if command_exists node; then
         NODE_CURRENT=$(node --version | cut -d'v' -f2 | cut -d'.' -f1)
-        if [ "$NODE_CURRENT" -ge "16" ]; then
+        if [ "$NODE_CURRENT" -ge "18" ]; then
             print_success "Node.js $(node --version) is already installed"
             return 0
         else
-            print_warning "Node.js version is too old ($(node --version)). Need >= 16"
+            print_warning "Node.js version is too old ($(node --version)). Need >= 18"
             return 1
         fi
     else
@@ -120,13 +120,10 @@ install_dependencies() {
     cd "$SCRIPT_DIR"
     
     if [ -f "package.json" ]; then
-        if [ -d "node_modules" ]; then
-            print_success "Dependencies already installed (node_modules found)"
-        else
-            print_status "Installing npm dependencies..."
-            npm install
-            print_success "Dependencies installed"
-        fi
+        # Always sync: fast when up to date, and upgrades pick up new or removed packages.
+        print_status "Installing npm dependencies..."
+        npm install --omit=dev
+        print_success "Dependencies installed"
     else
         print_error "package.json not found. Are you in the correct directory?"
         exit 1

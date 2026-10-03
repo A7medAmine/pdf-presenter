@@ -1,48 +1,18 @@
-# Dependencies
+# Only server.js, src/, public/ and the package files are copied into the image.
 node_modules
 npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Runtime data
-uploads/*.pdf
-uploads/*.PDF
-!uploads/.gitkeep
-
-# Environment files
-.env
-.env.local
-.env.*.local
-
-# IDE
+uploads
+data
+test
+coverage
+.git
+.github
 .vscode
 .idea
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Git
-.git
-.gitignore
-
-# Docker
+.env
+.env.*
+*.md
 Dockerfile*
 docker-compose*
-.dockerignore
-
-# Testing
-coverage
-.nyc_output
-
-# Logs
-logs
-*.log
-
-# Misc
-README.md
-LICENSE
-*.md
+*.sh
+*.bat

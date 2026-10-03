@@ -11,7 +11,7 @@ echo    PDF Presenter - Windows Installer
 echo ==========================================
 echo.
 
-set "NODE_VERSION=18"
+set "NODE_VERSION=22"
 set "APP_NAME=PDF Presenter"
 set "SCRIPT_DIR=%~dp0"
 cd /d "%SCRIPT_DIR%"
@@ -66,18 +66,15 @@ echo.
 
 :: Install dependencies
 if exist "package.json" (
-    if exist "node_modules" (
-        echo [SUCCESS] Dependencies already installed ^(node_modules found^)
-    ) else (
-        echo [INFO] Installing npm dependencies...
-        call npm install
-        if !ERRORLEVEL! NEQ 0 (
-            echo [ERROR] Failed to install dependencies
-            pause
-            exit /b 1
-        )
-        echo [SUCCESS] Dependencies installed
+    rem Always sync: fast when up to date, and upgrades pick up new or removed packages.
+    echo [INFO] Installing npm dependencies...
+    call npm install --omit=dev
+    if !ERRORLEVEL! NEQ 0 (
+        echo [ERROR] Failed to install dependencies
+        pause
+        exit /b 1
     )
+    echo [SUCCESS] Dependencies installed
 ) else (
     echo [ERROR] package.json not found. Are you in the correct directory?
     pause
@@ -103,10 +100,10 @@ exit /b 0
     node --version >nul 2>&1
     if %ERRORLEVEL% NEQ 0 exit /b 1
     
-    :: Check version (need >= 16)
+    :: Check version (need >= 18)
     for /f "tokens=1 delims=v." %%a in ('node --version') do (
         set "NODE_MAJOR=%%a"
-        if !NODE_MAJOR! LSS 16 exit /b 1
+        if !NODE_MAJOR! LSS 18 exit /b 1
     )
     exit /b 0
 
@@ -124,24 +121,22 @@ exit /b 0
         set "NODE_ARCH=x86"
     )
     
-    set "NODE_INSTALLER=node-v%sNODE_VERSION%.x-win-%NODE_ARCH%.msi"
-    set "NODE_URL=https://nodejs.org/dist/latest-v%sNODE_VERSION%.x/%NODE_INSTALLER%"
     
     :: Download using PowerShell
     echo [INFO] Downloading Node.js v%NODE_VERSION% for %NODE_ARCH%...
-    powershell -Command "Invoke-WebRequest -Uri 'https://nodejs.org/dist/latest-v18.x/' -OutFile 'node_index.html' -UseBasicParsing" 2>nul
     
     :: Get the actual MSI filename from the index
-    for /f "tokens=*" %%a in ('powershell -Command "(Invoke-WebRequest -Uri 'https://nodejs.org/dist/latest-v18.x/' -UseBasicParsing).Content | Select-String -Pattern 'node-v[\d\.]+-x64\.msi' | Select-Object -First 1 | ForEach-Object { $_.Matches.Value }"') do (
+    for /f "tokens=*" %%a in ('powershell -Command "(Invoke-WebRequest -Uri 'https://nodejs.org/dist/latest-v%NODE_VERSION%.x/' -UseBasicParsing).Content | Select-String -Pattern 'node-v[\d\.]+-%NODE_ARCH%\.msi' | Select-Object -First 1 | ForEach-Object { $_.Matches.Value }"') do (
         set "MSI_FILE=%%a"
     )
     
     if not defined MSI_FILE (
-        set "MSI_FILE=node-v18.20.4-x64.msi"
+        echo [ERROR] Could not find the Node.js installer for %NODE_ARCH%
+        exit /b 1
     )
     
     echo [INFO] Downloading %MSI_FILE%...
-    powershell -Command "Invoke-WebRequest -Uri 'https://nodejs.org/dist/latest-v18.x/%MSI_FILE%' -OutFile 'node_installer.msi' -UseBasicParsing"
+    powershell -Command "Invoke-WebRequest -Uri 'https://nodejs.org/dist/latest-v%NODE_VERSION%.x/%MSI_FILE%' -OutFile 'node_installer.msi' -UseBasicParsing"
     
     if not exist "node_installer.msi" (
         echo [ERROR] Failed to download Node.js installer

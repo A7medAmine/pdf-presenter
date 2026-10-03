@@ -1,590 +1,559 @@
 /**
- * PDF Presenter — Remote Control
- * MIT License
+ * PDF Presenter — remote control page (phone / tablet).
+ *
+ * Requests control of a session (the presenter approves it once per device),
+ * then sends slide commands, a pointer and offers private speaker notes with
+ * a teleprompter. Reconnects transparently after network drops.
+ *
+ * Licensed under the Apache License, Version 2.0.
  */
 
-const $ = (id) => document.getElementById(id);
+import {
+  $,
+  request,
+  icons,
+  local,
+  createToast,
+  setStatus,
+  normalizeSessionId,
+  SESSION_ID_PATTERN,
+  getDeviceId,
+  isTyping,
+  applySavedTheme,
+  fullscreenElement,
+  enterFullscreen,
+  exitFullscreen,
+  onFullscreenChange,
+  keepScreenAwake,
+} from "./lib/common.js";
 
-const connectScreen = $("remoteConnect");
-const remotePad = $("remotePad");
-const sessionInput = $("sessionInput");
-const connectBtn = $("connectBtn");
-const rcHint = $("rcHint");
-const rcPrev = $("rcPrev");
-const rcNext = $("rcNext");
-const rcSessionBadge = $("rcSessionBadge");
-const rcStatusDot = $("rcStatusDot");
-const rcSlideNum = $("rcSlideNum");
-const rcTotalSlides = $("rcTotalSlides");
-const rcSlideBox = $("rcSlideBox");
-const jumpInput = $("jumpInput");
-const jumpBtn = $("jumpBtn");
-const rcDisconnect = $("rcDisconnect");
-const rcFullscreen = $("rcFullscreen");
-const rcHeaderFullscreen = $("rcHeaderFullscreen");
-const rcCursorToggle = $("rcCursorToggle");
-const toast = $("toast");
-const notesArea = $("notesArea");
-const notesFontDown = $("notesFontDown");
-const notesFontUp = $("notesFontUp");
-const notesTeleBtn = $("notesTeleBtn");
-const teleOverlay = $("teleprompterOverlay");
-const tpClose = $("tpClose");
-const tpText = $("tpText");
-const tpTextWrap = $("tpTextWrap");
-const tpPlayPause = $("tpPlayPause");
-const rcFsOverlay = $("rcFsOverlay");
-const rfsCounter = $("rfsCounter");
-const rfsPrev = $("rfsPrev");
-const rfsNext = $("rfsNext");
-const rfsExit = $("rfsExit");
+applySavedTheme();
 
-let socket = null;
-let sessionId = null;
-let currentSlide = 1;
-let totalSlides = 0;
-let notesFontSize = 16;
-let cursorActive = false;
-let cursorEnabled = false;
+// ─── Constants ────────────────────────────────────────────────────────────────
 
-// Cursor throttle settings
-const CURSOR_THROTTLE_MS = 16; // ~60fps
-let lastCursorSend = 0;
-let pendingCursorPos = null;
+const NOTES_KEY = "presenter-notes";
+const NOTES_FONT_KEY = "presenter-notes-font";
+const RETRY_DELAY_MS = 5000;
+/** Teleprompter speed is expressed in "units"; one unit scrolls 60 px per second. */
+const TP_PX_PER_UNIT_PER_SEC = 60;
+const CURSOR_SEND_INTERVAL_MS = 16;
 
-// ── Auto-connect from URL param ───────────────────────────────────────────────
-const params = new URLSearchParams(window.location.search);
-const urlSession = params.get("session");
-//  SECURITY: Validate session ID format before using
-if (urlSession && /^[A-Z0-9]{8,16}$/i.test(urlSession)) {
-  sessionInput.value = urlSession.toUpperCase();
-  setTimeout(connectToSession, 300);
-}
+// ─── DOM ──────────────────────────────────────────────────────────────────────
 
-// ── Connect ───────────────────────────────────────────────────────────────────
-connectBtn.addEventListener("click", connectToSession);
-sessionInput.addEventListener("keydown", (e) => {
-  sessionInput.value = sessionInput.value.toUpperCase();
-  if (e.key === "Enter") connectToSession();
-});
+const dom = {
+  connectScreen: $("remoteConnect"),
+  sessionInput: $("sessionInput"),
+  connectBtn: $("connectBtn"),
+  hint: $("rcHint"),
 
-function connectToSession() {
-  const id = sessionInput.value.trim().toUpperCase();
-  if (!id || id.length < 4) {
-    rcHint.innerHTML =
-      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 4px;"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg> Enter a valid session ID';
-    rcHint.style.color = "var(--danger)";
+  pad: $("remotePad"),
+  sessionName: $("rcSessionName"),
+  sessionBadge: $("rcSessionBadge"),
+  status: $("rcStatusDot"),
+  headerFullscreen: $("rcHeaderFullscreen"),
+  cursorToggle: $("rcCursorToggle"),
+  fullscreen: $("rcFullscreen"),
+  disconnect: $("rcDisconnect"),
+  panel: $("tabControl"),
+  slideBox: $("rcSlideBox"),
+  slideNum: $("rcSlideNum"),
+  totalSlides: $("rcTotalSlides"),
+  prev: $("rcPrev"),
+  next: $("rcNext"),
+  jumpInput: $("jumpInput"),
+  jumpBtn: $("jumpBtn"),
+
+  notes: $("notesArea"),
+  notesFontDown: $("notesFontDown"),
+  notesFontUp: $("notesFontUp"),
+  teleBtn: $("notesTeleBtn"),
+
+  tele: $("teleprompterOverlay"),
+  tpClose: $("tpClose"),
+  tpText: $("tpText"),
+  tpWrap: $("tpTextWrap"),
+  tpPlayPause: $("tpPlayPause"),
+  tpSpeedValue: $("tpSpeedValue"),
+  tpSpeedUp: $("tpSpeedUp"),
+  tpSpeedDown: $("tpSpeedDown"),
+  tpPrev: $("tpPrevSlide"),
+  tpNext: $("tpNextSlide"),
+  tpIndicator: $("tpSlideIndicator"),
+
+  bigPad: $("rcFsOverlay"),
+  bigCounter: $("rfsCounter"),
+  bigPrev: $("rfsPrev"),
+  bigNext: $("rfsNext"),
+  bigExit: $("rfsExit"),
+};
+
+const toast = createToast($("toast"));
+
+// ─── State ────────────────────────────────────────────────────────────────────
+
+const state = {
+  sessionId: null,
+  /** @type {import("socket.io-client").Socket | null} */
+  socket: null,
+  approved: false,
+  currentSlide: 1,
+  totalSlides: 0,
+  retryTimer: null,
+  cursorEnabled: false,
+};
+
+// ─── Connection ───────────────────────────────────────────────────────────────
+
+function connect() {
+  const sessionId = normalizeSessionId(dom.sessionInput.value);
+  dom.sessionInput.value = sessionId;
+  if (!SESSION_ID_PATTERN.test(sessionId)) {
+    setStatus(dom.hint, { icon: icons.warning, text: "Enter the 16-character session ID", color: "var(--danger)" });
     return;
   }
-  rcHint.textContent = "Connecting…";
-  rcHint.style.color = "var(--text-3)";
-  sessionId = id;
 
-  socket = io({ transports: ["websocket", "polling"] });
+  state.sessionId = sessionId;
+  state.approved = false;
+  setStatus(dom.hint, { text: "Connecting…", color: "var(--text-3)" });
+  state.socket?.disconnect();
 
-  socket.on("connect", () => {
-    // 🔒 Request access first - presenter must approve
-    socket.emit("remote-request-access", {
-      sessionId,
-      deviceId: getDeviceId(),
-    });
+  const socket = window.io({ transports: ["websocket", "polling"], reconnectionDelayMax: 5000 });
+  state.socket = socket;
+
+  // Every (re)connection is a new server-side socket, so access is requested
+  // each time; devices approved earlier are let in without asking again.
+  socket.on("connect", requestAccess);
+
+  socket.on("disconnect", (reason) => {
+    setLive(false);
+    if (reason === "io server disconnect" && !state.approved) socket.disconnect();
   });
 
-  // Waiting for presenter approval
-  socket.on("remote-request-sent", ({ message }) => {
-    rcHint.innerHTML =
-      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 4px;"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg> Waiting for presenter approval...';
-    rcHint.style.color = "var(--warning)";
+  socket.on("remote-approved", ({ state: snapshot }) => {
+    toast("Access granted");
+    showPad(snapshot);
   });
 
-  // Access granted - server already joined us
-  socket.on("remote-approved", ({ message }) => {
-    rcHint.innerHTML =
-      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 4px;"><polyline points="20 6 9 17 4 12"/></svg> ' +
-      escapeHtml(message);
-    rcHint.style.color = "var(--success)";
-    // Server already joined the session, no need to emit join-session
-  });
-
-  // Access denied
   socket.on("remote-rejected", ({ message }) => {
-    rcHint.innerHTML =
-      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 4px;"><path d="M18 6L6 18M6 6l12 12"/></svg> ' +
-      escapeHtml(message);
-    rcHint.style.color = "var(--danger)";
-    setTimeout(() => disconnect(), 2000);
+    fail(message || "The presenter declined your request");
   });
 
-  socket.on("session-state", ({ currentSlide: cs, totalSlides: ts, name }) => {
-    currentSlide = cs || 1;
-    totalSlides = ts || 0;
-    updateSessionNameDisplay(name);
-    showPad();
+  socket.on("slide-update", ({ currentSlide }) => {
+    state.currentSlide = currentSlide;
+    updateSlideDisplay();
+    pulseSlideBox();
+  });
+
+  socket.on("total-slides-update", ({ totalSlides, currentSlide }) => {
+    state.totalSlides = totalSlides;
+    state.currentSlide = currentSlide;
     updateSlideDisplay();
   });
 
-  socket.on("slide-update", ({ currentSlide: cs }) => {
-    currentSlide = cs;
+  socket.on("pdf-loaded", ({ pdf, currentSlide, totalSlides }) => {
+    state.currentSlide = currentSlide;
+    state.totalSlides = totalSlides;
     updateSlideDisplay();
-    animateSlideChange();
-  });
-  socket.on("total-slides-update", ({ totalSlides: ts }) => {
-    totalSlides = ts;
-    updateSlideDisplay();
+    showSwapBanner(pdf.name);
   });
 
-  // ── Mid-session PDF swap notification ─────────────────────────────────────
-  socket.on("pdf-loaded", ({ filename }) => {
-    showToast("📄 New PDF: " + filename);
-    showPdfSwapBanner(filename);
-    // Reset slide counter display
-    currentSlide = 1;
-    updateSlideDisplay();
+  socket.on("presenter-status", ({ online }) => {
+    if (state.approved) toast(online ? "Presenter is back" : "Presenter disconnected — waiting…");
   });
 
-  socket.on("connect_error", () => setStatus(false));
-  socket.on("disconnect", () => setStatus(false));
-  socket.on("reconnect", () => {
-    setStatus(true);
-    // Re-request access on reconnect if not already approved
-    if (!socket.data?.approvedRemote) {
-      socket.emit("remote-request-access", {
-        sessionId,
-        deviceId: getDeviceId(),
-      });
-    }
-  });
+  socket.on("session-renamed", ({ name }) => showSessionName(name));
 
-  // Session renamed - update display
-  socket.on("session-renamed", ({ name }) => {
-    updateSessionNameDisplay(name);
-  });
-
-  // Session ended - show message and redirect
   socket.on("session-ended", ({ message }) => {
-    showToast(message, "warning");
+    state.approved = false;
+    socket.disconnect();
+    toast(message || "Session ended", { duration: 4000 });
     setTimeout(() => {
       window.location.href = "/access.html";
     }, 3000);
   });
 }
 
-// ── PDF Swap Banner ───────────────────────────────────────────────────────────
+async function requestAccess() {
+  clearTimeout(state.retryTimer);
+  const socket = state.socket;
+  const res = await request(socket, "remote-request-access", {
+    sessionId: state.sessionId,
+    deviceId: getDeviceId(),
+  });
+  if (socket !== state.socket) return; // user reconnected meanwhile
 
-function escapeHtml(text) {
-  const div = document.createElement("div");
-  div.textContent = text;
-  return div.innerHTML;
+  if (res.ok && res.status === "approved") {
+    showPad(res.state);
+    return;
+  }
+  if (res.ok && res.status === "pending") {
+    setStatus(dom.hint, { icon: icons.clock, text: "Waiting for the presenter to approve…", color: "var(--warning)" });
+    return;
+  }
+
+  switch (res.code) {
+    case "PRESENTER_OFFLINE":
+    case "RATE_LIMITED":
+    case "TIMEOUT":
+      setStatus(dom.hint, {
+        icon: icons.clock,
+        text: `${res.message || "Not available yet"} — retrying…`,
+        color: "var(--warning)",
+      });
+      state.retryTimer = setTimeout(() => {
+        if (socket.connected && socket === state.socket) requestAccess();
+      }, RETRY_DELAY_MS);
+      break;
+    default:
+      fail(res.message || "Could not connect");
+  }
 }
 
-function showPdfSwapBanner(filename) {
-  const existing = document.getElementById("rcPdfSwapBanner");
-  if (existing) existing.remove();
+/** Shows an error on the connect screen and closes the connection. */
+function fail(message) {
+  clearTimeout(state.retryTimer);
+  state.approved = false;
+  state.socket?.disconnect();
+  showConnectScreen();
+  setStatus(dom.hint, { icon: icons.cross, text: message, color: "var(--danger)" });
+}
 
+function disconnect() {
+  clearTimeout(state.retryTimer);
+  state.approved = false;
+  state.socket?.disconnect();
+  state.socket = null;
+  showConnectScreen();
+  setStatus(dom.hint, { text: "" });
+}
+
+// ─── Slide commands ───────────────────────────────────────────────────────────
+
+async function sendSlideChange(payload) {
+  if (!state.approved || !state.socket?.connected) {
+    toast("Not connected");
+    return;
+  }
+  navigator.vibrate?.(10);
+  const res = await request(state.socket, "slide-change", payload);
+  if (!res.ok) toast(res.code === "NO_PDF" ? "The presenter has not loaded a PDF yet" : res.message);
+}
+
+const next = () => sendSlideChange({ direction: "next" });
+const prev = () => sendSlideChange({ direction: "prev" });
+
+function jump() {
+  const slide = Number(dom.jumpInput.value);
+  if (!Number.isInteger(slide) || slide < 1 || (state.totalSlides && slide > state.totalSlides)) {
+    toast(state.totalSlides ? `Enter a slide between 1 and ${state.totalSlides}` : "Enter a slide number");
+    return;
+  }
+  sendSlideChange({ slide });
+  dom.jumpInput.value = "";
+  dom.jumpInput.blur();
+}
+
+// ─── UI ───────────────────────────────────────────────────────────────────────
+
+function showPad(snapshot) {
+  state.approved = true;
+  state.currentSlide = snapshot.currentSlide;
+  state.totalSlides = snapshot.totalSlides;
+  dom.connectScreen.hidden = true;
+  dom.pad.hidden = false;
+  dom.sessionBadge.textContent = state.sessionId;
+  showSessionName(snapshot.name);
+  setLive(true);
+  updateSlideDisplay();
+  keepScreenAwake();
+}
+
+function showConnectScreen() {
+  dom.pad.hidden = true;
+  dom.bigPad.hidden = true;
+  closeTeleprompter();
+  dom.connectScreen.hidden = false;
+}
+
+function setLive(online) {
+  dom.status.className = `rc-status ${online ? "connected" : "disconnected"}`;
+  dom.status.textContent = online ? "● Live" : "○ Reconnecting…";
+}
+
+function showSessionName(name) {
+  dom.sessionName.textContent = name || "Untitled Session";
+  dom.sessionName.hidden = false;
+}
+
+function updateSlideDisplay() {
+  const total = state.totalSlides || "?";
+  dom.slideNum.textContent = String(state.currentSlide);
+  dom.totalSlides.textContent = String(total);
+  dom.bigCounter.textContent = `${state.currentSlide} / ${total}`;
+  dom.tpIndicator.textContent = `${state.currentSlide} / ${total}`;
+  dom.jumpInput.max = String(state.totalSlides || 9999);
+}
+
+function pulseSlideBox() {
+  dom.slideBox.classList.remove("pulse");
+  void dom.slideBox.offsetWidth; // restart the CSS animation
+  dom.slideBox.classList.add("pulse");
+}
+
+function showSwapBanner(filename) {
+  document.getElementById("rcPdfSwapBanner")?.remove();
   const banner = document.createElement("div");
   banner.id = "rcPdfSwapBanner";
   banner.className = "rc-pdf-swap-banner";
-  banner.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg> <span>New PDF: <strong>${escapeHtml(filename)}</strong></span>`;
-
-  // Insert just below the header
-  const pad = document.getElementById("remotePad");
-  const header = pad.querySelector(".rc-header");
-  header.insertAdjacentElement("afterend", banner);
-
+  banner.setAttribute("role", "status");
+  banner.innerHTML = icons.swap;
+  const text = document.createElement("span");
+  text.append("New PDF: ");
+  const strong = document.createElement("strong");
+  strong.textContent = filename;
+  text.append(strong);
+  banner.append(text);
+  dom.pad.querySelector(".rc-header").insertAdjacentElement("afterend", banner);
   requestAnimationFrame(() => banner.classList.add("show"));
-
   setTimeout(() => {
     banner.classList.remove("show");
     setTimeout(() => banner.remove(), 400);
   }, 4000);
 }
 
-function showPad() {
-  connectScreen.style.display = "none";
-  remotePad.style.display = "flex";
-  rcSessionBadge.textContent = sessionId;
-  setStatus(true);
+// ─── Speaker notes ────────────────────────────────────────────────────────────
+
+let notesFontSize = Number(local.get(NOTES_FONT_KEY)) || 16;
+
+function applyNotesFont() {
+  notesFontSize = Math.min(32, Math.max(10, notesFontSize));
+  dom.notes.style.fontSize = `${notesFontSize}px`;
+  local.set(NOTES_FONT_KEY, String(notesFontSize));
 }
 
-function setStatus(online) {
-  rcStatusDot.innerHTML = online
-    ? '<span class="status-dot" style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: currentColor; margin-right: 6px;"></span>Live'
-    : '<span class="status-dot" style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: currentColor; margin-right: 6px;"></span>Disconnected';
-  rcStatusDot.className =
-    "rc-status " + (online ? "connected" : "disconnected");
-}
+// ─── Teleprompter ─────────────────────────────────────────────────────────────
 
-// ── Slide Commands ────────────────────────────────────────────────────────────
-function sendSlideChange(dir) {
-  if (!socket?.connected) {
-    showToast("Not connected", "warning");
-    return;
-  }
-  socket.emit("slide-change", { sessionId, direction: dir });
-}
-function sendJump(slide) {
-  if (!socket?.connected) return;
-  socket.emit("slide-change", { sessionId, slide });
-}
-
-rcPrev.addEventListener("click", () => sendSlideChange("prev"));
-rcNext.addEventListener("click", () => sendSlideChange("next"));
-jumpBtn.addEventListener("click", () => {
-  const n = parseInt(jumpInput.value);
-  if (n >= 1) {
-    sendJump(n);
-    jumpInput.value = "";
-  }
-});
-jumpInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") jumpBtn.click();
-});
-
-// Bluetooth clicker keyboard support
-document.addEventListener("keydown", (e) => {
-  if (
-    document.activeElement === jumpInput ||
-    document.activeElement === notesArea
-  )
-    return;
-  if (e.key === "ArrowRight" || e.key === " ") sendSlideChange("next");
-  if (e.key === "ArrowLeft") sendSlideChange("prev");
-});
-
-// ── Session Name Display ─────────────────────────────────────────────────────
-function updateSessionNameDisplay(name) {
-  const nameEl = document.getElementById("rcSessionName");
-  if (nameEl) {
-    nameEl.textContent = name || "Untitled Session";
-    nameEl.style.display = "inline";
-  }
-}
-
-// ── Display ───────────────────────────────────────────────────────────────────
-function updateSlideDisplay() {
-  const ts = totalSlides || "?";
-  rcSlideNum.textContent = currentSlide;
-  rcTotalSlides.textContent = ts;
-  rfsCounter.textContent = currentSlide + " / " + ts;
-  if (jumpInput) jumpInput.max = totalSlides || 999;
-  // Update teleprompter slide indicator too
-  updateTpSlideIndicator();
-}
-
-function animateSlideChange() {
-  rcSlideBox.style.transform = "scale(1.18)";
-  rcSlideBox.style.color = "var(--accent-2)";
-  setTimeout(() => {
-    rcSlideBox.style.transform = "scale(1)";
-    rcSlideBox.style.color = "var(--accent)";
-  }, 180);
-}
-
-// ── Disconnect ────────────────────────────────────────────────────────────────
-rcDisconnect.addEventListener("click", () => {
-  socket?.disconnect();
-  sessionId = null;
-  remotePad.style.display = "none";
-  connectScreen.style.display = "flex";
-  sessionInput.value = "";
-  rcHint.textContent = "";
-});
-
-// ── Notes Font ────────────────────────────────────────────────────────────────
-notesFontDown.addEventListener("click", () => {
-  notesFontSize = Math.max(10, notesFontSize - 2);
-  notesArea.style.fontSize = notesFontSize + "px";
-});
-notesFontUp.addEventListener("click", () => {
-  notesFontSize = Math.min(32, notesFontSize + 2);
-  notesArea.style.fontSize = notesFontSize + "px";
-});
-
-// Persist notes
-notesArea.addEventListener("input", () =>
-  localStorage.setItem("presenter-notes", notesArea.value),
-);
-const savedNotes = localStorage.getItem("presenter-notes");
-if (savedNotes) notesArea.value = savedNotes;
-
-// ── Teleprompter ──────────────────────────────────────────────────────────────
-let tpRunning = true;
-let tpRaf = null;
-let tpSpeedVal = 1.5;
-
-notesTeleBtn.addEventListener("click", openTeleprompter);
-tpClose.addEventListener("click", closeTeleprompter);
-
-function escapeHtml(text) {
-  const div = document.createElement("div");
-  div.textContent = text;
-  return div.innerHTML;
-}
+const tp = { running: false, speed: 1.5, position: 0, lastTime: 0, raf: 0 };
 
 function openTeleprompter() {
-  const text = notesArea.value.trim();
+  const text = dom.notes.value.trim();
   if (!text) {
-    showToast("Add some notes first", "warning");
+    toast("Add some notes first");
     return;
   }
-  //  SECURITY: Escape HTML to prevent XSS in notes
-  tpText.innerHTML = escapeHtml(text)
-    .split(/\n\n+/)
-    .map((p) => "<p>" + p.replace(/\n/g, "<br>") + "</p>")
-    .join("");
-  tpTextWrap.scrollTop = 0;
-  teleOverlay.style.display = "flex";
-  tpRunning = true;
-  tpPlayPause.textContent = "⏸ Pause";
-  startTpScroll();
-  teleOverlay.requestFullscreen?.().catch(() => {});
+  // Paragraphs are built as DOM nodes, so notes can never inject HTML.
+  const paragraphs = text.split(/\n{2,}/).map((block) => {
+    const p = document.createElement("p");
+    block.split("\n").forEach((line, i) => {
+      if (i) p.append(document.createElement("br"));
+      p.append(line);
+    });
+    return p;
+  });
+  dom.tpText.replaceChildren(...paragraphs);
+  dom.tpWrap.scrollTop = 0;
+  tp.position = 0;
+  dom.tele.hidden = false;
+  enterFullscreen(dom.tele);
+  setTeleprompterRunning(true);
 }
 
 function closeTeleprompter() {
-  stopTpScroll();
-  teleOverlay.style.display = "none";
-  if (document.fullscreenElement) document.exitFullscreen();
+  setTeleprompterRunning(false);
+  dom.tele.hidden = true;
+  if (fullscreenElement() === dom.tele) exitFullscreen();
 }
 
-tpPlayPause.addEventListener("click", () => {
-  tpRunning = !tpRunning;
-  tpPlayPause.textContent = tpRunning ? "⏸ Pause" : "▶ Play";
-  if (tpRunning) startTpScroll();
-  else stopTpScroll();
-});
+function setTeleprompterRunning(running) {
+  tp.running = running;
+  dom.tpPlayPause.textContent = running ? "⏸ Pause" : "▶ Play";
+  cancelAnimationFrame(tp.raf);
+  if (!running) return;
+  tp.position = dom.tpWrap.scrollTop;
+  tp.lastTime = performance.now();
+  tp.raf = requestAnimationFrame(stepTeleprompter);
+}
 
-const tpSpeedValue = $("tpSpeedValue");
-const tpSpeedUp = $("tpSpeedUp");
-const tpSpeedDown = $("tpSpeedDown");
-const tpPrevSlide = $("tpPrevSlide");
-const tpNextSlide = $("tpNextSlide");
-const tpSlideIndicator = $("tpSlideIndicator");
+/** Time-based scrolling: same speed on 60 Hz and 120 Hz screens, and slow speeds still move. */
+function stepTeleprompter(now) {
+  if (!tp.running) return;
+  const elapsed = (now - tp.lastTime) / 1000;
+  tp.lastTime = now;
+  tp.position += tp.speed * TP_PX_PER_UNIT_PER_SEC * elapsed;
+  dom.tpWrap.scrollTop = tp.position;
+  if (dom.tpWrap.scrollTop + dom.tpWrap.clientHeight >= dom.tpWrap.scrollHeight - 1) {
+    setTeleprompterRunning(false);
+    return;
+  }
+  tp.raf = requestAnimationFrame(stepTeleprompter);
+}
 
-// Speed button controls (0.1 increments, min 0.1 to allow very slow scrolling)
-tpSpeedUp?.addEventListener("click", () => {
-  tpSpeedVal = Math.min(8, tpSpeedVal + 0.1);
-  if (tpSpeedValue) tpSpeedValue.textContent = tpSpeedVal.toFixed(1);
-});
+function changeSpeed(delta) {
+  tp.speed = Math.round(Math.min(8, Math.max(0.1, tp.speed + delta)) * 10) / 10;
+  dom.tpSpeedValue.textContent = tp.speed.toFixed(1);
+}
 
-tpSpeedDown?.addEventListener("click", () => {
-  tpSpeedVal = Math.max(0.1, tpSpeedVal - 0.1);
-  if (tpSpeedValue) tpSpeedValue.textContent = tpSpeedVal.toFixed(1);
-});
+// ─── Pointer (remote cursor) ──────────────────────────────────────────────────
 
-// Slide controls for teleprompter
-tpPrevSlide?.addEventListener("click", () => {
-  sendSlideChange("prev");
-});
+let lastCursorSend = 0;
+let pendingCursor = null;
+let cursorTimer = null;
 
-tpNextSlide?.addEventListener("click", () => {
-  sendSlideChange("next");
-});
+function sendCursor(x, y, active) {
+  if (state.approved && state.socket?.connected) state.socket.emit("cursor-move", { x, y, active });
+}
 
-// Update slide indicator when slide changes
-function updateTpSlideIndicator() {
-  if (tpSlideIndicator) {
-    tpSlideIndicator.textContent = `${currentSlide} / ${totalSlides}`;
+/** Throttles pointer moves to ~60 per second, always delivering the latest position. */
+function queueCursor(x, y) {
+  pendingCursor = { x, y };
+  const wait = CURSOR_SEND_INTERVAL_MS - (Date.now() - lastCursorSend);
+  if (wait <= 0) {
+    flushCursor();
+  } else if (!cursorTimer) {
+    cursorTimer = setTimeout(flushCursor, wait);
   }
 }
 
-function startTpScroll() {
-  stopTpScroll();
-  function step() {
-    if (!tpRunning) return;
-    tpTextWrap.scrollTop += tpSpeedVal;
-    if (
-      tpTextWrap.scrollTop + tpTextWrap.clientHeight >=
-      tpTextWrap.scrollHeight
-    ) {
-      tpRunning = false;
-      tpPlayPause.textContent = "▶ Play";
-      return;
-    }
-    tpRaf = requestAnimationFrame(step);
-  }
-  tpRaf = requestAnimationFrame(step);
-}
-function stopTpScroll() {
-  if (tpRaf) {
-    cancelAnimationFrame(tpRaf);
-    tpRaf = null;
-  }
+function flushCursor() {
+  clearTimeout(cursorTimer);
+  cursorTimer = null;
+  if (!pendingCursor) return;
+  sendCursor(pendingCursor.x, pendingCursor.y, true);
+  lastCursorSend = Date.now();
+  pendingCursor = null;
 }
 
-tpTextWrap.addEventListener("click", () => {
-  tpRunning = !tpRunning;
-  tpPlayPause.textContent = tpRunning ? "⏸ Pause" : "▶ Play";
-  if (tpRunning) startTpScroll();
-  else stopTpScroll();
+function releaseCursor() {
+  clearTimeout(cursorTimer);
+  cursorTimer = null;
+  pendingCursor = null;
+  sendCursor(0, 0, false);
+}
+
+/** Maps a pointer position on the control panel to slide coordinates in [0, 1]. */
+function panelPosition(event) {
+  const rect = dom.panel.getBoundingClientRect();
+  return {
+    x: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)),
+    y: Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)),
+  };
+}
+
+const isControl = (target) => Boolean(target.closest("button, input, textarea, select, label"));
+
+dom.panel.addEventListener("pointerdown", (e) => {
+  if (!state.cursorEnabled || isControl(e.target)) return;
+  dom.panel.setPointerCapture(e.pointerId);
+  const { x, y } = panelPosition(e);
+  queueCursor(x, y);
 });
-
-// ── Fullscreen Pad ────────────────────────────────────────────────────────────
-rcFullscreen.addEventListener("click", () => {
-  rcFsOverlay.style.display = "flex";
-  rcFsOverlay.requestFullscreen?.().catch(() => {});
+dom.panel.addEventListener("pointermove", (e) => {
+  if (!state.cursorEnabled || !dom.panel.hasPointerCapture(e.pointerId)) return;
+  const { x, y } = panelPosition(e);
+  queueCursor(x, y);
 });
-
-rcHeaderFullscreen.addEventListener("click", () => {
-  rcFsOverlay.style.display = "flex";
-  rcFsOverlay.requestFullscreen?.().catch(() => {});
-});
-
-rcCursorToggle.addEventListener("click", () => {
-  cursorEnabled = !cursorEnabled;
-  rcCursorToggle.classList.toggle("active", cursorEnabled);
-
-  if (!cursorEnabled && cursorActive) {
-    handleCursorEnd();
-  }
-
-  showToast(cursorEnabled ? "👆 Cursor enabled" : "👆 Cursor disabled");
-});
-
-rfsExit.addEventListener("click", () => {
-  rcFsOverlay.style.display = "none";
-  if (document.fullscreenElement) document.exitFullscreen();
-});
-
-document.addEventListener("fullscreenchange", () => {
-  if (!document.fullscreenElement) {
-    rcFsOverlay.style.display = "none";
-    teleOverlay.style.display = "none";
-    stopTpScroll();
-  }
-});
-
-rfsPrev.addEventListener("click", () => sendSlideChange("prev"));
-rfsNext.addEventListener("click", () => sendSlideChange("next"));
-
-// ── Theme ─────────────────────────────────────────────────────────────────────
-const savedTheme = localStorage.getItem("presenter-theme");
-if (savedTheme) document.documentElement.dataset.theme = savedTheme;
-
-// ── Toast ─────────────────────────────────────────────────────────────────────
-let toastTimer;
-function showToast(msg) {
-  toast.textContent = msg;
-  toast.classList.add("show");
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toast.classList.remove("show"), 3000);
-}
-
-// ── Cursor Control ─────────────────────────────────────────────────────────────
-function sendCursorMove(x, y, active) {
-  if (socket && socket.connected) {
-    socket.emit("cursor-move", { sessionId, x, y, active });
-  }
-}
-
-let cursorTimeout = null;
-
-function throttledCursorMove(x, y, active) {
-  const now = Date.now();
-  pendingCursorPos = { x, y, active };
-
-  if (now - lastCursorSend >= CURSOR_THROTTLE_MS) {
-    sendCursorMove(x, y, active);
-    lastCursorSend = now;
-    pendingCursorPos = null;
-  } else if (!cursorTimeout) {
-    // Schedule send if not already scheduled
-    cursorTimeout = setTimeout(
-      () => {
-        if (pendingCursorPos) {
-          sendCursorMove(
-            pendingCursorPos.x,
-            pendingCursorPos.y,
-            pendingCursorPos.active,
-          );
-          lastCursorSend = Date.now();
-          pendingCursorPos = null;
-        }
-        cursorTimeout = null;
-      },
-      CURSOR_THROTTLE_MS - (now - lastCursorSend),
-    );
-  }
-}
-
-// Generate or retrieve persistent device ID
-function getDeviceId() {
-  let deviceId = localStorage.getItem("pdf-presenter-device-id");
-  if (!deviceId) {
-    // Fallback for browsers without crypto.randomUUID()
-    if (crypto && crypto.randomUUID) {
-      deviceId = crypto.randomUUID();
-    } else {
-      // Generate a random hex string as fallback
-      const array = new Uint8Array(16);
-      crypto.getRandomValues(array);
-      deviceId = Array.from(array, (byte) =>
-        byte.toString(16).padStart(2, "0"),
-      ).join("");
-    }
-    localStorage.setItem("pdf-presenter-device-id", deviceId);
-  }
-  return deviceId;
-}
-
-function handleCursorInteraction(e) {
-  if (!socket || !socket.connected || !cursorEnabled) return;
-
-  const rect = e.currentTarget.getBoundingClientRect();
-  // Simple proportional mapping: touch position directly maps to slide position
-  // Full range of control panel maps to full range of slide
-  const x = ((e.clientX || e.touches[0].clientX) - rect.left) / rect.width;
-  const y = ((e.clientY || e.touches[0].clientY) - rect.top) / rect.height;
-
-  // Clamp to valid range
-  const normalizedX = Math.max(0, Math.min(1, x));
-  const normalizedY = Math.max(0, Math.min(1, y));
-
-  // Throttled send for smooth performance
-  throttledCursorMove(normalizedX, normalizedY, true);
-}
-
-function handleCursorEnd() {
-  cursorActive = false;
-  sendCursorMove(0, 0, false);
-}
-
-const controlPanel = document.querySelector(".rc-tab-panel");
-if (controlPanel) {
-  controlPanel.addEventListener("mousedown", (e) => {
-    if (e.target.closest("button, input, textarea")) return;
-    cursorActive = true;
-    handleCursorInteraction(e);
+for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) {
+  dom.panel.addEventListener(type, () => {
+    if (state.cursorEnabled) releaseCursor();
   });
+}
 
-  controlPanel.addEventListener("mousemove", (e) => {
-    if (!cursorActive) return;
-    if (e.target.closest("button, input, textarea")) {
-      handleCursorEnd();
-      return;
-    }
-    handleCursorInteraction(e);
-  });
+function toggleCursor() {
+  state.cursorEnabled = !state.cursorEnabled;
+  dom.cursorToggle.classList.toggle("active", state.cursorEnabled);
+  dom.cursorToggle.setAttribute("aria-pressed", String(state.cursorEnabled));
+  // While the pointer is on, touches on the pad must not scroll the page.
+  dom.panel.classList.toggle("pointer-mode", state.cursorEnabled);
+  if (!state.cursorEnabled) releaseCursor();
+  toast(state.cursorEnabled ? "Pointer on — drag on the pad" : "Pointer off");
+}
 
-  controlPanel.addEventListener("mouseup", handleCursorEnd);
-  controlPanel.addEventListener("mouseleave", handleCursorEnd);
+// ─── Big-button fullscreen pad ────────────────────────────────────────────────
 
-  controlPanel.addEventListener("touchstart", (e) => {
-    if (e.target.closest("button, input, textarea")) return;
-    cursorActive = true;
-    handleCursorInteraction(e);
+function openBigPad() {
+  dom.bigPad.hidden = false;
+  enterFullscreen(dom.bigPad);
+}
+
+function closeBigPad() {
+  dom.bigPad.hidden = true;
+  if (fullscreenElement() === dom.bigPad) exitFullscreen();
+}
+
+onFullscreenChange(() => {
+  if (fullscreenElement()) return;
+  // Leaving fullscreen (e.g. with the system back gesture) closes the overlays.
+  dom.bigPad.hidden = true;
+  if (!dom.tele.hidden) closeTeleprompter();
+});
+
+// ─── Event wiring ─────────────────────────────────────────────────────────────
+
+dom.connectBtn.addEventListener("click", connect);
+dom.sessionInput.addEventListener("input", () => {
+  dom.sessionInput.value = normalizeSessionId(dom.sessionInput.value);
+});
+dom.sessionInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") connect();
+});
+
+dom.prev.addEventListener("click", prev);
+dom.next.addEventListener("click", next);
+dom.jumpBtn.addEventListener("click", jump);
+dom.jumpInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") jump();
+});
+dom.disconnect.addEventListener("click", disconnect);
+dom.cursorToggle.addEventListener("click", toggleCursor);
+dom.fullscreen.addEventListener("click", openBigPad);
+dom.headerFullscreen.addEventListener("click", openBigPad);
+dom.bigPrev.addEventListener("click", prev);
+dom.bigNext.addEventListener("click", next);
+dom.bigExit.addEventListener("click", closeBigPad);
+
+dom.notes.value = local.get(NOTES_KEY) || "";
+dom.notes.addEventListener("input", () => local.set(NOTES_KEY, dom.notes.value));
+dom.notesFontDown.addEventListener("click", () => {
+  notesFontSize -= 2;
+  applyNotesFont();
+});
+dom.notesFontUp.addEventListener("click", () => {
+  notesFontSize += 2;
+  applyNotesFont();
+});
+applyNotesFont();
+
+dom.teleBtn.addEventListener("click", openTeleprompter);
+dom.tpClose.addEventListener("click", closeTeleprompter);
+dom.tpPlayPause.addEventListener("click", () => setTeleprompterRunning(!tp.running));
+dom.tpWrap.addEventListener("click", () => setTeleprompterRunning(!tp.running));
+dom.tpSpeedUp.addEventListener("click", () => changeSpeed(0.1));
+dom.tpSpeedDown.addEventListener("click", () => changeSpeed(-0.1));
+dom.tpPrev.addEventListener("click", prev);
+dom.tpNext.addEventListener("click", next);
+changeSpeed(0);
+
+// Bluetooth presentation clickers send arrow or Page Up/Down keys.
+document.addEventListener("keydown", (e) => {
+  if (!state.approved || isTyping(e.target) || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (["ArrowRight", "ArrowDown", "PageDown", " "].includes(e.key)) {
     e.preventDefault();
-  });
-
-  controlPanel.addEventListener("touchmove", (e) => {
-    if (!cursorActive) return;
-    if (e.target.closest("button, input, textarea")) {
-      handleCursorEnd();
-      return;
-    }
-    handleCursorInteraction(e);
+    next();
+  } else if (["ArrowLeft", "ArrowUp", "PageUp"].includes(e.key)) {
     e.preventDefault();
-  });
+    prev();
+  } else if (e.key === "Escape") {
+    closeBigPad();
+    closeTeleprompter();
+  }
+});
 
-  controlPanel.addEventListener("touchend", handleCursorEnd);
-  controlPanel.addEventListener("touchcancel", handleCursorEnd);
+// ─── Boot ─────────────────────────────────────────────────────────────────────
+
+const initialId = normalizeSessionId(new URLSearchParams(window.location.search).get("session"));
+if (SESSION_ID_PATTERN.test(initialId)) {
+  dom.sessionInput.value = initialId;
+  connect();
+} else {
+  dom.sessionInput.focus();
 }

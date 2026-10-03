@@ -3,7 +3,13 @@
    Aesthetic: dark cinema / editorial with warm amber accents
    ========================================================= */
 
-@import url("https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap");
+@import url("/css/fonts.css");
+
+/* ── Base ──────────────────────────────────────────────── */
+/* The `hidden` attribute must win over component display rules. */
+[hidden] {
+  display: none !important;
+}
 
 /* ── CSS Variables ──────────────────────────────────────── */
 :root {
@@ -551,73 +557,6 @@ button {
   color: var(--text-2);
 }
 
-/* ── PDF Library ────────────────────────────────────────── */
-.pdf-library {
-  margin-top: 24px;
-  text-align: left;
-}
-.library-title {
-  font-size: 0.85rem;
-  color: var(--text-2);
-  margin-bottom: 10px;
-}
-.library-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.library-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 14px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-2);
-  border: 1px solid var(--border);
-  font-size: 0.875rem;
-  color: var(--text-2);
-  cursor: pointer;
-  transition: var(--transition);
-}
-.library-item:hover {
-  border-color: var(--accent);
-  color: var(--text);
-}
-.library-item span {
-  font-size: 0.75rem;
-  color: var(--accent);
-}
-.library-item .library-name {
-  color: var(--text);
-  font-size: 0.85rem;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.library-item .library-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.library-item .library-load {
-  color: var(--accent);
-}
-.library-item .library-delete {
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  padding: 4px 6px;
-  border-radius: var(--radius-sm);
-  font-size: 0.9rem;
-  opacity: 0.6;
-  transition: var(--transition);
-}
-.library-item .library-delete:hover {
-  opacity: 1;
-  background: var(--danger);
-}
-
 /* ── Slide Area ─────────────────────────────────────────── */
 .slide-area {
   flex: 1;
@@ -643,8 +582,28 @@ button {
 
 #slideCanvas {
   display: block;
-  max-width: 100%;
-  max-height: calc(100vh - var(--topbar-h) - 40px);
+  background: #fff;
+  cursor: pointer;
+}
+
+/* ── PDF link annotations ───────────────────────────────── */
+.link-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+.pdf-link {
+  position: absolute;
+  pointer-events: auto;
+  border-radius: 2px;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease;
+}
+.pdf-link:hover,
+.pdf-link:focus-visible {
+  background: rgba(59, 130, 246, 0.2);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.7);
+  outline: none;
 }
 
 /* ── Slide Transition ───────────────────────────────────── */
@@ -752,20 +711,6 @@ button {
   border-radius: 50%;
   transform: translate(-50%, -50%);
   box-shadow: 0 0 10px rgba(255, 0, 0, 0.8);
-}
-
-/* ── Laser Dot ──────────────────────────────────────────── */
-.laser-dot {
-  position: absolute;
-  width: 16px;
-  height: 16px;
-  background: #ff2040;
-  border-radius: 50%;
-  box-shadow: 0 0 12px 4px rgba(255, 32, 64, 0.6);
-  pointer-events: none;
-  display: none;
-  z-index: 20;
-  transform: translate(-50%, -50%);
 }
 
 /* ── Slide Strip ─────────────────────────────────────────── */
@@ -989,35 +934,6 @@ button {
   margin: 16px 0 8px;
   padding-top: 16px;
   border-top: 1px solid var(--border);
-}
-
-.library-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 12px;
-  margin-top: 16px;
-}
-
-.library-grid-item {
-  background: var(--bg-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 14px;
-  cursor: pointer;
-  transition: var(--transition);
-  text-align: center;
-  font-size: 0.8rem;
-}
-.library-grid-item:hover {
-  border-color: var(--accent);
-}
-.library-grid-item .lib-icon {
-  font-size: 2rem;
-  margin-bottom: 8px;
-}
-.library-grid-item .lib-name {
-  color: var(--text-2);
-  word-break: break-all;
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -1793,10 +1709,7 @@ button {
     height: 30px;
   }
 
-  /* Canvas & nav */
-  #slideCanvas {
-    max-height: calc(100vh - 48px - 10px);
-  }
+  /* Nav */
   .nav-btn {
     width: 36px;
     height: 56px;
@@ -2149,14 +2062,17 @@ button {
   padding: 16px;
 }
 
+/* Positions the canvas and the remote cursor in the same box. */
+.vs-stage {
+  position: relative;
+  flex-shrink: 0;
+  line-height: 0;
+}
+
 #viewerCanvas {
-  max-width: 100%;
-  max-height: 100%;
-  width: auto;
-  height: auto;
+  display: block;
   box-shadow: var(--shadow);
   background: white;
-  object-fit: contain;
 }
 
 .vs-waiting {
@@ -2335,18 +2251,10 @@ button {
   max-height: 100%;
 }
 
-.viewer-slide.fs-mode.orient-portrait #viewerCanvas {
-  max-width: 100%;
-  max-height: none;
-  width: 100%;
-  height: auto;
-}
-
-.viewer-slide.fs-mode.orient-landscape #viewerCanvas {
-  max-width: none;
-  max-height: 100%;
-  width: auto;
-  height: 100%;
+/* Portrait documents fill the width and scroll vertically. */
+.orient-portrait .vs-canvas-wrap {
+  overflow-y: auto;
+  align-items: flex-start;
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -2428,7 +2336,6 @@ button {
   position: fixed;
   top: 20px;
   right: 20px;
-  display: none;
   z-index: 300;
   max-width: 320px;
 }
@@ -2613,7 +2520,7 @@ button {
 /* ─── Dhikr Toast Notifications ──────────────────────────────────────────────── */
 @font-face {
   font-family: "Amiri";
-  src: url("/Amiri-Regular.ttf") format("truetype");
+  src: url("/fonts/Amiri-Regular.ttf") format("truetype");
   font-weight: normal;
   font-style: normal;
   font-display: swap;
@@ -2677,4 +2584,343 @@ button {
 
 .dhikr-toast:hover::before {
   opacity: 1;
+}
+
+/* ══════════════════════════════════════════════════════════
+   ADDITIONS
+   ══════════════════════════════════════════════════════════ */
+
+/* Session name in the presenter top bar (click to rename). */
+.session-name-display {
+  background: none;
+  border: 1px dashed transparent;
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-left: 12px;
+  max-width: 220px;
+  overflow: hidden;
+  padding: 2px 6px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-name-display:hover,
+.session-name-display:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.btn-success {
+  background: var(--success);
+  border-color: var(--success);
+  color: #fff;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.upload-zone:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.upload-zone.busy {
+  pointer-events: none;
+  opacity: 0.6;
+}
+
+/* Thumbnails are buttons for keyboard access; reset button chrome. */
+.strip-thumb {
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.strip-thumb canvas {
+  width: auto;
+  height: 100%;
+}
+
+/* Viewer "presenter offline" notice. */
+.vs-presenter-offline {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  padding: 6px 14px;
+  border-radius: 20px;
+  background: rgba(0, 0, 0, 0.7);
+  color: var(--warning);
+  font-size: 0.8rem;
+  pointer-events: none;
+}
+
+.vs-reconnecting button {
+  margin-top: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════
+   ACCESS PAGE (/access)
+   ══════════════════════════════════════════════════════════ */
+
+.access-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 20px;
+  text-align: center;
+}
+.access-card {
+  background: var(--bg-2);
+  padding: 40px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
+  max-width: 500px;
+  width: 100%;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+}
+.access-card h1 {
+  margin-bottom: 12px;
+  font-size: 1.8rem;
+  color: var(--text);
+}
+.access-card p {
+  color: var(--text-2);
+  margin-bottom: 30px;
+  font-size: 0.95rem;
+}
+.session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 20px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  padding-right: 4px;
+}
+.session-list::-webkit-scrollbar {
+  width: 6px;
+}
+.session-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.session-list::-webkit-scrollbar-thumb {
+  background: var(--border-2);
+  border-radius: 3px;
+}
+.search-wrapper {
+  position: relative;
+  margin-top: 20px;
+}
+.search-wrapper svg {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-3);
+  pointer-events: none;
+}
+.search-input {
+  width: 100%;
+  padding: 10px 14px 10px 38px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-1);
+  color: var(--text);
+  font-size: 0.95rem;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+.search-input:focus {
+  border-color: var(--accent);
+}
+.search-input::placeholder {
+  color: var(--text-3);
+}
+.session-hidden {
+  display: none !important;
+}
+.session-item {
+  background: var(--bg-3);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius);
+  padding: 20px;
+  text-align: left;
+  transition:
+    transform 0.2s,
+    border-color 0.2s;
+}
+.session-item:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent);
+}
+.session-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.session-id {
+  font-family: var(--font-mono);
+  font-weight: 800;
+  color: var(--accent);
+  font-size: 1.2rem;
+}
+.session-filename {
+  font-size: 0.85rem;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+.session-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.session-time {
+  font-size: 0.75rem;
+  color: var(--text-3);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.session-viewers {
+  font-size: 0.75rem;
+  color: var(--text-3);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.filter-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+  align-items: center;
+}
+.filter-row label {
+  font-size: 0.8rem;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.sort-select, .time-filter-select {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-1);
+  color: var(--text);
+  font-size: 0.8rem;
+  cursor: pointer;
+  outline: none;
+}
+.sort-select:focus, .time-filter-select:focus {
+  border-color: var(--accent);
+}
+.action-buttons {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+.action-buttons .btn {
+  justify-content: center;
+  text-decoration: none;
+}
+.no-sessions {
+  padding: 30px;
+  color: var(--text-3);
+  font-style: italic;
+}
+.refresh-btn {
+  margin-top: 20px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.refresh-btn:hover {
+  background: var(--bg-3);
+  color: var(--text);
+}
+.session-state {
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.session-state.online {
+  color: var(--success);
+}
+.session-state.offline {
+  color: var(--text-3);
+}
+.session-lock svg {
+  vertical-align: middle;
+}
+
+/* ══════════════════════════════════════════════════════════
+   SMALL ANIMATIONS & STATES
+   ══════════════════════════════════════════════════════════ */
+
+/* Viewer: brief amber flash when the slide changes. */
+.vs-canvas-wrap.vs-flash::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(240, 165, 0, 0.1);
+  pointer-events: none;
+  animation: vsFlash 0.25s ease forwards;
+}
+@keyframes vsFlash {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* Remote: the slide number pops when the slide changes. */
+.rc-slide-box.pulse {
+  animation: rcPulse 0.25s ease;
+}
+@keyframes rcPulse {
+  from {
+    transform: scale(1.18);
+    color: var(--accent-2);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+
+/* Remote: while the pointer is on, dragging the pad must not scroll the page. */
+.rc-tab-panel.pointer-mode {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
 }

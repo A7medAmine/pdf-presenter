@@ -5,26 +5,25 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>PDF Presenter</title>
     <link rel="stylesheet" href="/css/style.css" />
-    <link rel="preload" href="/Amiri-Regular.ttf" as="font" type="font/ttf" crossorigin />
+    <link rel="preload" href="/fonts/Amiri-Regular.ttf" as="font" type="font/ttf" crossorigin />
     <!-- Favicon -->
     <link rel="apple-touch-icon" sizes="180x180" href="/favicon/apple-touch-icon.png">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon/favicon-32x32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon/favicon-16x16.png">
     <link rel="icon" type="image/x-icon" href="/favicon/favicon.ico">
     <link rel="manifest" href="/favicon/site.webmanifest">
-    <!-- PDF.js (local) -->
-    <script src="/vendor/pdf.min.js"></script>
-    <!-- Socket.io -->
-    <script src="/socket.io/socket.io.js"></script>
-    <!-- QRious (local) -->
-    <script src="/vendor/qrious.min.js"></script>
+    <!-- Vendor libraries (bundled, work offline) -->
+    <script src="/vendor/pdf.min.js" defer></script>
+    <script src="/socket.io/socket.io.js" defer></script>
+    <script src="/vendor/qrious.min.js" defer></script>
+    <script type="module" src="/js/presenter.js"></script>
   </head>
   <body class="presenter-page">
     <!-- ── Top Bar ─────────────────────────────────────────────────── -->
     <header class="topbar" id="topbar">
       <div class="topbar-left">
         <span class="logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;"><path d="M12 2l8.66 5v10L12 22l-8.66-5V7L12 2z"/></svg> Presenter</span>
-        <span class="session-name-display" id="sessionNameDisplay" title="Session Name" style="display: none; color: var(--accent); font-weight: 600; font-size: 0.9rem; margin-left: 12px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Untitled Session</span>
+        <button type="button" class="session-name-display" id="sessionNameDisplay" title="Click to rename the session" hidden>Untitled Session</button>
         <span class="session-badge" id="sessionBadge" title="Session ID"
           >—</span
         >
@@ -38,7 +37,7 @@
           class="btn btn-secondary"
           id="changePdfBtn"
           title="Switch to a different PDF"
-          style="display: none"
+          hidden
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
           Change PDF
@@ -53,6 +52,7 @@
           class="btn btn-secondary"
           id="showRemoteBtn"
           title="Show remote QR"
+          disabled
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;"><rect x="6" y="2" width="12" height="20" rx="2" ry="2"/><circle cx="12" cy="7" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="17" r="1"/><line x1="8" y1="6" x2="10" y2="6"/><line x1="8" y1="11" x2="10" y2="11"/><line x1="8" y1="16" x2="10" y2="16"/></svg>
           Remote
@@ -61,6 +61,7 @@
           class="btn btn-secondary"
           id="showViewerBtn"
           title="Show viewer QR"
+          disabled
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
           Viewer
@@ -69,7 +70,8 @@
           class="btn btn-danger"
           id="endSessionBtn"
           title="End Session"
-          style="display: none; margin-left: 8px;"
+          style="margin-left: 8px;"
+          hidden
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;"><path d="M18 6L6 18M6 6l12 12"/></svg>
           End
@@ -78,7 +80,7 @@
     </header>
 
     <!-- ── Setup Panel (shown before PDF is loaded, and when swapping) ─ -->
-    <div class="setup-overlay" id="setupOverlay">
+    <div class="setup-overlay" id="setupOverlay" data-mode="loading">
       <div class="setup-card">
         <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
           <div class="setup-logo"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l8.66 5v10L12 22l-8.66-5V7L12 2z"/></svg></div>
@@ -91,6 +93,7 @@
           Upload a PDF and start presenting. Control slides from any device.
         </p>
 
+        <div id="createSection" hidden>
         <!-- Session Name Input -->
         <div class="session-name-input" style="margin-bottom: 12px;">
           <label for="sessionNameInput" style="display: block; color: var(--text-2); font-size: 0.85rem; margin-bottom: 6px;">Session name</label>
@@ -115,32 +118,25 @@
         <button id="startSessionBtn" class="btn btn-primary" style="width: 100%; margin-bottom: 20px;">
           Start Session
         </button>
+        </div>
 
-        <div class="upload-zone" id="uploadZone" style="display: none;">
-          <input type="file" id="fileInput" accept=".pdf" multiple hidden />
+        <div class="upload-zone" id="uploadZone" tabindex="0" role="button" aria-label="Choose a PDF to upload" hidden>
+          <input type="file" id="fileInput" accept="application/pdf,.pdf" hidden />
           <div class="upload-icon">📄</div>
           <p>
             Drop PDF here or
             <label for="fileInput" class="upload-link">browse</label>
           </p>
-          <span class="upload-hint"
-            >Up to 100 MB · Multiple files supported</span
-          >
+          <span class="upload-hint">PDF files only · one file at a time</span>
         </div>
 
-        <!-- PDF library (previously uploaded) -->
-        <div class="pdf-library" id="pdfLibrary" style="display: none">
-          <p class="library-title">Or load a previously uploaded PDF:</p>
-          <div class="library-list" id="libraryList"></div>
-        </div>
-
-        <div class="upload-progress" id="uploadProgress" style="display: none">
+        <div class="upload-progress" id="uploadProgress" hidden>
           <div class="progress-bar">
             <div class="progress-fill" id="progressFill"></div>
           </div>
           <span id="progressLabel">Uploading…</span>
         </div>
-        <!-- Cancel button injected by JS when swapping mid-session -->
+        <button type="button" class="btn swap-cancel-btn" id="swapCancelBtn" hidden>Cancel</button>
         <footer class="setup-footer">
           <a href="https://github.com/A7medAmine/pdf-presenter" target="_blank" rel="noopener noreferrer" class="footer-link">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="vertical-align: middle; margin-right: 6px;"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
@@ -152,7 +148,7 @@
             Apache-2.0 License
           </span>
           <span class="footer-separator">·</span>
-          <button class="footer-like-btn" id="likeBtn" title="Like this app">
+          <button type="button" class="footer-like-btn" id="likeBtn" title="Like this app" aria-pressed="false">
             <svg class="like-heart" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
             </svg>
@@ -166,8 +162,8 @@
     <main class="slide-area" id="slideArea">
       <div class="slide-wrapper" id="slideWrapper">
         <canvas id="slideCanvas"></canvas>
-        <!-- Laser pointer overlay -->
-        <div class="laser-dot" id="laserDot"></div>
+        <!-- Clickable areas for links embedded in the PDF -->
+        <div class="link-layer" id="linkLayer"></div>
         <!-- Artificial cursor for remote control -->
         <div class="artificial-cursor" id="artificialCursor"></div>
         <!-- Transition overlay -->
@@ -175,10 +171,10 @@
       </div>
 
       <!-- Navigation arrows -->
-      <button class="nav-btn nav-prev" id="prevBtn" title="Previous (←)">
+      <button type="button" class="nav-btn nav-prev" id="prevBtn" title="Previous (←)" aria-label="Previous slide">
         &#8249;
       </button>
-      <button class="nav-btn nav-next" id="nextBtn" title="Next (→)">
+      <button type="button" class="nav-btn nav-next" id="nextBtn" title="Next (→)" aria-label="Next slide">
         &#8250;
       </button>
 
@@ -187,17 +183,17 @@
     </main>
 
     <!-- ── Remote Control Modal ────────────────────────────────────── -->
-    <div class="modal-backdrop" id="remoteModal" style="display: none">
+    <div class="modal-backdrop" id="remoteModal" role="dialog" aria-modal="true" aria-labelledby="remoteModalTitle" hidden>
       <div class="modal-card">
-        <button class="modal-close" id="closeRemoteModal">
+        <button type="button" class="modal-close" id="closeRemoteModal" aria-label="Close">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
-        <h2>Remote Control</h2>
+        <h2 id="remoteModalTitle">Remote Control</h2>
         <p class="modal-sub">Scan with your phone to control slides</p>
 
         <div class="ip-row">
-          <label class="ip-label"
-            >Device IP <span class="ip-hint">(for network access)</span></label
+          <label class="ip-label" for="ipInput"
+            >Server address <span class="ip-hint">(as reachable from phones)</span></label
           >
           <div class="ip-input-group">
             <input
@@ -209,9 +205,9 @@
             />
             <button class="btn btn-sm" id="applyIpBtn">Apply</button>
           </div>
-          <select id="ipSelector" class="ip-selector" style="display: none; width: 100%; margin-top: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-1); color: var(--text); font-size: 0.85rem; cursor: pointer;"></select>
+          <select id="ipSelector" class="ip-selector" hidden style="width: 100%; margin-top: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-1); color: var(--text); font-size: 0.85rem; cursor: pointer;"></select>
           <p class="ip-note" id="ipNote">
-            Leave blank to use <code>localhost</code>
+            Leave blank to use the address in your browser bar
           </p>
         </div>
 
@@ -223,16 +219,16 @@
 
         <div class="remote-stats">
           <span>Session: <strong id="modalSessionId">—</strong></span>
-          <span id="connectedCount">0 remote(s) connected</span>
+          <span id="connectedCount">0 remotes connected</span>
         </div>
         <div class="modal-actions" style="display: flex; flex-direction: column; gap: 10px; margin-top: 16px; align-items: center;">
-          <button class="btn btn-secondary" style="width: 100%; justify-content: center; display: inline-flex; align-items: center;" id="copyUrlBtn">
+          <button type="button" class="btn btn-secondary" style="width: 100%; justify-content: center; display: inline-flex; align-items: center;" id="copyUrlBtn">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
             Copy Link
           </button>
-          <button class="btn btn-danger" style="width: 100%; justify-content: center; display: inline-flex; align-items: center;" id="toggleRemoteRequestsBtn" onclick="toggleRemoteRequests()">
+          <button type="button" class="btn btn-danger" style="width: 100%; justify-content: center; display: inline-flex; align-items: center;" id="toggleRemoteRequestsBtn">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px;"><circle cx="12" cy="12" r="10"/><path d="M4.93 4.93l14.14 14.14"/></svg>
-            Disable Remote Requests
+            <span>Disable remote requests</span>
           </button>
         </div>
         <p class="remote-requests-hint" style="font-size: 0.75rem; color: var(--text-3); margin-top: 10px; text-align: center;">Stop accepting new remote control requests</p>
@@ -240,12 +236,12 @@
     </div>
 
     <!-- ── Viewer Modal ─────────────────────────────────────────────── -->
-    <div class="modal-backdrop" id="viewerModal" style="display: none">
+    <div class="modal-backdrop" id="viewerModal" role="dialog" aria-modal="true" aria-labelledby="viewerModalTitle" hidden>
       <div class="modal-card">
-        <button class="modal-close" id="closeViewerModal">
+        <button type="button" class="modal-close" id="closeViewerModal" aria-label="Close">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
-        <h2>
+        <h2 id="viewerModalTitle">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 8px;"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
           Viewer
         </h2>
@@ -254,11 +250,11 @@
         <div class="orientation-row">
           <label class="orientation-label">Presentation Orientation:</label>
           <div class="orientation-toggle">
-            <button class="orientation-btn active" id="orientLandscape" data-orient="landscape">
+            <button type="button" class="orientation-btn active" id="orientLandscape" data-orient="landscape" aria-pressed="true">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
               Landscape
             </button>
-            <button class="orientation-btn" id="orientPortrait" data-orient="portrait">
+            <button type="button" class="orientation-btn" id="orientPortrait" data-orient="portrait" aria-pressed="false">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12" y2="18.01"/></svg>
               Portrait
             </button>
@@ -276,56 +272,34 @@
 
         <div class="remote-stats">
           <span>Session: <strong id="viewerModalSessionId">—</strong></span>
-          <span id="viewerCount">0 viewer(s) connected</span>
+          <span id="viewerCount">0 viewers connected</span>
         </div>
-        <button class="btn btn-secondary" id="copyViewerUrlBtn">
+        <button type="button" class="btn btn-secondary" id="copyViewerUrlBtn">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
           Copy Link
         </button>
       </div>
     </div>
 
-    <!-- ── PDF Library Modal ───────────────────────────────────────── -->
-    <div class="modal-backdrop" id="libraryModal" style="display: none">
-      <div class="modal-card modal-wide">
-        <button class="modal-close" id="closeLibraryModal">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
-        </button>
-        <h2>PDF Library</h2>
-        <div class="library-grid" id="libraryGrid"></div>
+    <!-- ── Remote access request (shown when a phone asks to control) ─ -->
+    <div class="remote-approval-dialog" id="remoteApprovalDialog" role="alertdialog" aria-labelledby="approvalTitle" hidden>
+      <div class="remote-approval-content">
+        <div class="remote-approval-header">
+          <h3 id="approvalTitle"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 8px;" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg> Remote Access Request</h3>
+          <button type="button" class="btn-close" id="dismissApprovalBtn" title="Hide for now" aria-label="Hide"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        </div>
+        <p id="approvalCount">1 remote waiting</p>
+        <p class="remote-id" id="approvalDevice">Device</p>
+        <div class="remote-approval-buttons">
+          <button type="button" class="btn-approve" id="approveRemoteBtn">Accept</button>
+          <button type="button" class="btn-reject" id="rejectRemoteBtn">Reject</button>
+          <button type="button" class="btn-block" id="blockRemoteBtn" title="Reject and block this device">Block</button>
+        </div>
       </div>
     </div>
 
     <!-- ── Toast notification ─────────────────────────────────────── -->
-    <div class="toast" id="toast"></div>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-    <script src="/js/presenter.js"></script>
-    <script>
-      // Show "Change PDF" button once a PDF has been loaded
-      const _origLoadPdf = window.loadPdfFromUrl;
-      const _setupObs = new MutationObserver(() => {
-        const overlay = document.getElementById("setupOverlay");
-        const btn = document.getElementById("changePdfBtn");
-        const titleEl = document.getElementById("setupTitle");
-        const subEl = document.getElementById("setupSubtitle");
-        if (!overlay || !btn) return;
-        if (overlay.classList.contains("hide")) {
-          // A PDF has been loaded — reveal the button
-          btn.style.display = "inline-flex";
-        }
-        // Update title/subtitle text when in swap mode
-        if (overlay.dataset.swapMode) {
-          if (titleEl) titleEl.textContent = "Switch PDF";
-          if (subEl) subEl.textContent = "Upload a new PDF or choose from the library. The session stays open for all connected devices.";
-        } else {
-          if (titleEl) titleEl.textContent = "PDF Presenter";
-          if (subEl) subEl.textContent = "Upload a PDF and start presenting. Control slides from any device.";
-        }
-      });
-      _setupObs.observe(document.getElementById("setupOverlay"), {
-        attributes: true,
-        attributeFilter: ["class", "data-swap-mode"],
-      });
-    </script>
   </body>
 </html>

@@ -1,41 +1,29 @@
-# PDF Presenter - Docker Container
-# Multi-stage build for smaller image size
+# PDF Presenter — container image
+# Multi-stage build: dependencies are installed in a throwaway stage.
 
-# Build stage
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
 
+FROM node:22-alpine
+ENV NODE_ENV=production \
+    PORT=3000 \
+    HOST=0.0.0.0
 WORKDIR /app
 
-# Copy package files first for better caching
-COPY package*.json ./
+# Writable runtime directories owned by the unprivileged `node` user.
+RUN mkdir -p /app/uploads /app/data && chown node:node /app/uploads /app/data
 
-# Install dependencies (only production)
-RUN npm ci --only=production
+COPY --from=deps /app/node_modules ./node_modules
+COPY package.json server.js ./
+COPY src ./src
+COPY public ./public
 
-# Production stage
-FROM node:20-alpine AS production
-
-# Create app directory
-WORKDIR /app
-
-# Create uploads directory with proper permissions
-RUN mkdir -p /app/uploads && chown -R node:node /app
-
-# Copy dependencies from builder
-COPY --from=builder /app/node_modules ./node_modules
-
-# Copy app source
-COPY --chown=node:node . .
-
-# Switch to non-root user for security
 USER node
-
-# Expose the application port
 EXPOSE 3000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:3000/health', (r) => r.statusCode === 200 ? process.exit(0) : process.exit(1))"
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD node -e "require('http').get('http://127.0.0.1:'+(process.env.PORT||3000)+'/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
 
-# Start the application
 CMD ["node", "server.js"]

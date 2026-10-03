@@ -144,3 +144,6 @@ uploads/
 
 # Videos
 explanation.mp4
+
+# Runtime state (likes counter) — created by the server
+data/

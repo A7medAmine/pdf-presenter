@@ -1,836 +1,910 @@
 /**
- * PDF Presenter — Presenter Logic
- * MIT License
+ * PDF Presenter — presenter page.
  *
- * Handles:
- *  - Session creation & PDF upload
- *  - PDF.js rendering to canvas
- *  - Keyboard / touch / swipe navigation
- *  - WebSocket sync (Socket.io)
- *  - QR code modal
- *  - Theme toggle & fullscreen
- *  - Thumbnail strip generation
- *  - Mid-session PDF swap (without closing session)
+ * Responsibilities:
+ *  - create or restore a session (survives page reloads via sessionStorage)
+ *  - upload / swap the PDF and render it sharply (see lib/pdf-renderer.js)
+ *  - navigate with keyboard, clicks, swipes and the thumbnail strip
+ *  - stay in sync with remotes and viewers over Socket.io
+ *  - approve, reject or block remote controllers
+ *  - share remote / viewer links as QR codes
+ *
+ * Licensed under the Apache License, Version 2.0.
  */
 
-// ─── PDF.js Configuration ─────────────────────────────────────────────────────
-pdfjsLib.GlobalWorkerOptions.workerSrc = "../vendor/pdf.worker.min.js";
-pdfjsLib.GlobalWorkerOptions.standardFontDataUrl = "/vendor/standard_fonts/";
+import {
+  $,
+  api,
+  request,
+  icons,
+  local,
+  session as sessionStore,
+  createToast,
+  getDeviceId,
+  isTyping,
+  copyText,
+  drawQr,
+  applySavedTheme,
+  bindThemeToggles,
+  fullscreenElement,
+  enterFullscreen,
+  exitFullscreen,
+  onFullscreenChange,
+} from "./lib/common.js";
+import { openDocument, renderThumbnail, SlideRenderer } from "./lib/pdf-renderer.js";
+import { startDhikr } from "./lib/dhikr.js";
 
-// ─── State ────────────────────────────────────────────────────────────────────
-const state = {
-  sessionId: null,
-  pdfDoc: null,
-  currentSlide: 1,
-  totalSlides: 0,
-  rendering: false,
-  remoteUrl: null,
-  viewerUrl: null,
-  uploadToken: null, //  Secure token for API authorization
-  connectedRemotes: 0,
-  connectedViewers: 0,
-  renderTask: null,
+applySavedTheme();
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const STORAGE_KEY = "presenter-session";
+const IP_KEY = "presenter-ip";
+const ORIENTATION_KEY = "presenter-orientation";
+const SWIPE_THRESHOLD_PX = 50;
+const THUMB_HEIGHT_PX = 44;
+/** Link annotations are only followed for these protocols (never `javascript:`). */
+const SAFE_LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
+
+// ─── DOM ──────────────────────────────────────────────────────────────────────
+
+const dom = {
+  topbar: $("topbar"),
+  sessionName: $("sessionNameDisplay"),
+  sessionBadge: $("sessionBadge"),
+  slideCounter: $("slideCounter"),
+  changePdfBtn: $("changePdfBtn"),
+  themeToggle: $("themeToggle"),
+  fullscreenBtn: $("fullscreenBtn"),
+  showRemoteBtn: $("showRemoteBtn"),
+  showViewerBtn: $("showViewerBtn"),
+  endSessionBtn: $("endSessionBtn"),
+
+  setupOverlay: $("setupOverlay"),
+  setupThemeToggle: $("setupThemeToggle"),
+  setupTitle: $("setupTitle"),
+  setupSubtitle: $("setupSubtitle"),
+  createSection: $("createSection"),
+  sessionNameInput: $("sessionNameInput"),
+  sessionPasswordInput: $("sessionPasswordInput"),
+  togglePasswordBtn: $("toggleSessionPassword"),
+  startSessionBtn: $("startSessionBtn"),
+  uploadZone: $("uploadZone"),
+  fileInput: $("fileInput"),
+  uploadProgress: $("uploadProgress"),
+  progressFill: $("progressFill"),
+  progressLabel: $("progressLabel"),
+  swapCancelBtn: $("swapCancelBtn"),
+  likeBtn: $("likeBtn"),
+  likeCount: $("likeCount"),
+
+  slideArea: $("slideArea"),
+  slideWrapper: $("slideWrapper"),
+  canvas: $("slideCanvas"),
+  linkLayer: $("linkLayer"),
+  cursor: $("artificialCursor"),
+  transition: $("transitionOverlay"),
+  prevBtn: $("prevBtn"),
+  nextBtn: $("nextBtn"),
+  slideStrip: $("slideStrip"),
+
+  remoteModal: $("remoteModal"),
+  ipInput: $("ipInput"),
+  ipSelector: $("ipSelector"),
+  ipNote: $("ipNote"),
+  applyIpBtn: $("applyIpBtn"),
+  qrCanvas: $("qrCanvas"),
+  remoteUrlDisplay: $("remoteUrlDisplay"),
+  modalSessionId: $("modalSessionId"),
+  remoteCount: $("connectedCount"),
+  copyRemoteUrlBtn: $("copyUrlBtn"),
+  toggleRemoteRequestsBtn: $("toggleRemoteRequestsBtn"),
+
+  viewerModal: $("viewerModal"),
+  orientLandscape: $("orientLandscape"),
+  orientPortrait: $("orientPortrait"),
+  viewerQrCanvas: $("viewerQrCanvas"),
+  viewerUrlDisplay: $("viewerUrlDisplay"),
+  viewerModalSessionId: $("viewerModalSessionId"),
+  viewerCount: $("viewerCount"),
+  copyViewerUrlBtn: $("copyViewerUrlBtn"),
+
+  approvalDialog: $("remoteApprovalDialog"),
+  approvalCount: $("approvalCount"),
+  approvalDevice: $("approvalDevice"),
+  approveBtn: $("approveRemoteBtn"),
+  rejectBtn: $("rejectRemoteBtn"),
+  blockBtn: $("blockRemoteBtn"),
+  dismissApprovalBtn: $("dismissApprovalBtn"),
 };
 
-// ─── DOM References ───────────────────────────────────────────────────────────
-const $ = (id) => document.getElementById(id);
-const canvas = $("slideCanvas");
-const ctx = canvas.getContext("2d");
-const slideArea = $("slideArea");
-const slideWrapper = $("slideWrapper");
-const setupOverlay = $("setupOverlay");
-const uploadZone = $("uploadZone");
-const fileInput = $("fileInput");
-const progressDiv = $("uploadProgress");
-const progressFill = $("progressFill");
-const progressLabel = $("progressLabel");
-const slideCounter = $("slideCounter");
-const sessionBadge = $("sessionBadge");
-const topbar = $("topbar");
-const prevBtn = $("prevBtn");
-const nextBtn = $("nextBtn");
-const slideStrip = $("slideStrip");
-const transOverlay = $("transitionOverlay");
-const laserDot = $("laserDot");
-const artificialCursor = $("artificialCursor");
-const remoteModal = $("remoteModal");
-const modalSessId = $("modalSessionId");
-const remoteUrlEl = $("remoteUrlDisplay");
-const qrCanvas = $("qrCanvas");
-const toast = $("toast");
+const toast = createToast($("toast"));
+const notificationSound = new Audio("/sounds/notification.mp3");
+notificationSound.preload = "auto";
 
-// ─── Session Storage Helpers ──────────────────────────────────────────────────
+// ─── State ────────────────────────────────────────────────────────────────────
 
-function saveSessionToStorage() {
-  if (state.sessionId && state.uploadToken) {
-    sessionStorage.setItem("presenter-session-id", state.sessionId);
-    sessionStorage.setItem("presenter-upload-token", state.uploadToken);
-    // Store URLs for QR code regeneration on refresh
-    if (state.remoteUrl) sessionStorage.setItem("presenter-remote-url", state.remoteUrl);
-    if (state.viewerUrl) sessionStorage.setItem("presenter-viewer-url", state.viewerUrl);
+const state = {
+  /** @type {{ sessionId: string, presenterToken: string, remoteUrl: string, viewerUrl: string } | null} */
+  session: null,
+  /** @type {import("socket.io-client").Socket | null} */
+  socket: null,
+  joined: false,
+  /** @type {import("pdfjs-dist").PDFDocumentProxy | null} */
+  doc: null,
+  currentSlide: 1,
+  totalSlides: 0,
+  remoteRequestsEnabled: true,
+  /** Pending remote requests, oldest first. */
+  pendingRemotes: /** @type {{ remoteSocketId: string, deviceLabel: string }[]} */ ([]),
+  orientation: local.get(ORIENTATION_KEY) === "portrait" ? "portrait" : "landscape",
+  /** Increments on every paint so stale async link-layer work can be dropped. */
+  paintId: 0,
+};
+
+const renderer = new SlideRenderer(dom.canvas, {
+  cacheSize: 5,
+  fit(pageWidth, pageHeight) {
+    const fullscreen = Boolean(fullscreenElement());
+    const maxWidth = dom.slideArea.clientWidth - (fullscreen ? 0 : 60);
+    const maxHeight = dom.slideArea.clientHeight - (fullscreen ? 0 : 40);
+    const scale = Math.max(0.01, Math.min(maxWidth / pageWidth, maxHeight / pageHeight));
+    return { width: pageWidth * scale, height: pageHeight * scale };
+  },
+  onPaint({ pageNum, page }) {
+    renderLinkLayer(page);
+    renderer.preload(pageNum + 1);
+    renderer.preload(pageNum - 1);
+  },
+});
+
+// ─── Session persistence ──────────────────────────────────────────────────────
+
+function saveSession() {
+  if (state.session) sessionStore.set(STORAGE_KEY, JSON.stringify(state.session));
+}
+
+function loadSavedSession() {
+  try {
+    const saved = JSON.parse(sessionStore.get(STORAGE_KEY) || "null");
+    return saved && saved.sessionId && saved.presenterToken ? saved : null;
+  } catch {
+    return null;
   }
 }
 
-function clearSessionFromStorage() {
-  sessionStorage.removeItem("presenter-session-id");
-  sessionStorage.removeItem("presenter-upload-token");
-  sessionStorage.removeItem("presenter-remote-url");
-  sessionStorage.removeItem("presenter-viewer-url");
+function forgetSession() {
+  sessionStore.remove(STORAGE_KEY);
 }
 
-function getSessionFromStorage() {
-  return {
-    sessionId: sessionStorage.getItem("presenter-session-id"),
-    uploadToken: sessionStorage.getItem("presenter-upload-token"),
-    remoteUrl: sessionStorage.getItem("presenter-remote-url"),
-    viewerUrl: sessionStorage.getItem("presenter-viewer-url"),
+// ─── Setup overlay ────────────────────────────────────────────────────────────
+
+/**
+ * Switches the setup overlay between its modes.
+ * @param {"create"|"upload"|"swap"|"replaced"|"hidden"} mode
+ */
+function setSetupMode(mode) {
+  dom.setupOverlay.dataset.mode = mode;
+  dom.setupOverlay.classList.toggle("hide", mode === "hidden");
+  dom.setupOverlay.setAttribute("aria-hidden", String(mode === "hidden"));
+  dom.createSection.hidden = mode !== "create";
+  dom.uploadZone.hidden = mode !== "upload" && mode !== "swap";
+  dom.swapCancelBtn.hidden = mode !== "swap";
+  if (mode !== "upload" && mode !== "swap") dom.uploadProgress.hidden = true;
+
+  const copy = {
+    create: ["PDF Presenter", "Upload a PDF and start presenting. Control slides from any device."],
+    upload: ["Upload your slides", "Session ready! Upload a PDF to start presenting."],
+    swap: ["Switch PDF", "Upload a new PDF. Everyone stays connected and jumps to the new file."],
+    replaced: ["Opened in another tab", "This session is now controlled from another tab or window. Reload to take it back."],
+  }[mode];
+  if (copy) {
+    dom.setupTitle.textContent = copy[0];
+    dom.setupSubtitle.textContent = copy[1];
+  }
+  if (mode === "create") dom.sessionNameInput.focus();
+  if (mode === "upload" || mode === "swap") dom.uploadZone.focus();
+}
+
+// ─── Session lifecycle ────────────────────────────────────────────────────────
+
+async function startSession() {
+  const name = dom.sessionNameInput.value.trim() || null;
+  const password = dom.sessionPasswordInput.value;
+  if (password && password.length < 4) {
+    toast("Password must be at least 4 characters");
+    dom.sessionPasswordInput.focus();
+    return;
+  }
+
+  dom.startSessionBtn.disabled = true;
+  const { ok, data } = await api("/api/session", { method: "POST", body: { name, password: password || null } });
+  dom.startSessionBtn.disabled = false;
+  if (!ok) {
+    toast(data.error || "Could not create the session");
+    return;
+  }
+
+  state.session = {
+    sessionId: data.sessionId,
+    presenterToken: data.presenterToken,
+    remoteUrl: data.remoteUrl,
+    viewerUrl: data.viewerUrl,
   };
+  saveSession();
+  enterSession(data.name, null);
 }
 
-// ─── Session Init ─────────────────────────────────────────────────────────────
-
-async function initSession(name = null, password = null) {
-  try {
-    const res = await fetch("/api/session", {
-      method: "POST",
-      headers: {
-        "X-Requested-With": "XMLHttpRequest",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ name, password }),
-    });
-    const data = await res.json();
-
-    state.sessionId = data.sessionId;
-    state.uploadToken = data.uploadToken; //  Store secure token
-    state.remoteUrl = data.remoteUrl;
-    state.viewerUrl = data.viewerUrl;
-
-    // Persist to sessionStorage for refresh recovery
-    saveSessionToStorage();
-
-    // Update UI badges
-    if (sessionBadge) sessionBadge.textContent = data.sessionId || "—";
-    if (modalSessId) modalSessId.textContent = data.sessionId || "—";
-    updateSessionNameDisplay(data.name);
-
-    // Initial QR draw using saved IP address
-    const savedIp = localStorage.getItem("presenter-ip");
-    refreshQR(savedIp || null);
-
-    // Connect to WebSocket
-    connectSocket();
-
-    //  SECURITY: PDF library disabled - shows all files on server, security risk
-    // loadPdfLibrary();
-  } catch (err) {
-    console.error("Session init failed:", err);
-    showToast("Could not create session — is the server running?", "warning");
-  }
-}
-
-// ─── Session Restore ────────────────────────────────────────────────────────────
-
+/** Tries to resume the session stored in this tab. */
 async function restoreSession() {
-  const { sessionId, uploadToken, remoteUrl, viewerUrl } = getSessionFromStorage();
-  if (!sessionId || !uploadToken) return false;
+  const saved = loadSavedSession();
+  if (!saved) return false;
 
-  // Restore URLs first so QR generation works immediately
-  if (remoteUrl) state.remoteUrl = remoteUrl;
-  if (viewerUrl) state.viewerUrl = viewerUrl;
-
-  try {
-    // Try to fetch session state from server
-    const res = await fetch(`/api/session/${sessionId}`, {
-      headers: {
-        "X-Requested-With": "XMLHttpRequest",
-        "X-Upload-Token": uploadToken,
-      },
-    });
-
-    if (res.status === 404) {
-      // Session no longer exists
-      clearSessionFromStorage();
-      return false;
-    }
-
-    if (!res.ok) {
-      clearSessionFromStorage();
-      return false;
-    }
-
-    const data = await res.json();
-
-    // Restore state
-    state.sessionId = sessionId;
-    state.uploadToken = uploadToken;
-    state.currentSlide = data.currentSlide || 1;
-    state.totalSlides = data.totalSlides || 0;
-    // Rebuild URLs with current host if needed (for when hostname changed)
-    if (!state.remoteUrl) {
-      state.remoteUrl = `${window.location.origin}/remote.html?session=${sessionId}`;
-    }
-    if (!state.viewerUrl) {
-      state.viewerUrl = `${window.location.origin}/viewer.html?session=${sessionId}`;
-    }
-
-    // Update UI
-    if (sessionBadge) sessionBadge.textContent = sessionId || "—";
-    if (modalSessId) modalSessId.textContent = sessionId || "—";
-    updateSessionNameDisplay(data.name);
-    updateCounterUI();
-
-    // Regenerate QR codes with restored URLs
-    const savedIp = localStorage.getItem("presenter-ip");
-    refreshQR(savedIp || null);
-
-    // Connect to WebSocket
-    connectSocket();
-
-    // If there's a PDF, load it
-    if (data.pdfFile) {
-      loadPdfFromUrl(data.pdfFile, null, { skipNotify: true });
-    } else {
-      // Show setup overlay for PDF upload only (session already exists)
-      setupOverlay.style.display = "flex";
-      // Hide session creation elements, show only upload
-      const startBtn = $("startSessionBtn");
-      const nameInput = $("sessionNameInput");
-      const nameInputDiv = nameInput?.parentElement;
-      const uploadZone = $("uploadZone");
-      const subtitle = $("setupSubtitle");
-
-      if (startBtn) startBtn.style.display = "none";
-      if (nameInputDiv) nameInputDiv.style.display = "none";
-      if (uploadZone) uploadZone.style.display = "block";
-      if (subtitle) subtitle.textContent = "Session restored! Upload a PDF to continue presenting.";
-    }
-
-    //  SECURITY: PDF library disabled - shows all files on server, security risk
-    // loadPdfLibrary();
-
-    showToast("Session restored", "success");
-    return true;
-  } catch (err) {
-    console.error("Session restore failed:", err);
-    clearSessionFromStorage();
+  const { ok, status, data } = await api(`/api/session/${saved.sessionId}`, {
+    headers: { "X-Presenter-Token": saved.presenterToken },
+  });
+  if (!ok) {
+    if (status !== 0) forgetSession(); // keep it when the server is merely unreachable
     return false;
   }
+
+  state.session = saved;
+  enterSession(data.name, data);
+  toast("Session restored");
+  return true;
 }
 
-// ─── End Session ────────────────────────────────────────────────────────────────
+/**
+ * Shows the session UI, connects the socket and loads the PDF if there is one.
+ * @param {string} name
+ * @param {object|null} serverState Public session state, when restoring.
+ */
+function enterSession(name, serverState) {
+  const { sessionId } = state.session;
+  showSessionName(name);
+  dom.sessionBadge.textContent = sessionId;
+  dom.modalSessionId.textContent = sessionId;
+  dom.viewerModalSessionId.textContent = sessionId;
+  dom.endSessionBtn.hidden = false;
+  dom.showRemoteBtn.disabled = false;
+  dom.showViewerBtn.disabled = false;
 
-function endSession() {
-  if (!socket || !state.sessionId) return;
+  connectSocket();
 
-  // Emit end-session event to server
-  socket.emit("end-session", { sessionId: state.sessionId });
-
-  // Clear session storage
-  clearSessionFromStorage();
-
-  // Disconnect socket
-  socket.disconnect();
-
-  // Redirect to home/start screen
-  window.location.href = "/";
-}
-
-// ─── Session Name UI ────────────────────────────────────────────────────────────
-
-function updateSessionNameDisplay(name) {
-  const nameEl = $("sessionNameDisplay");
-  const endBtn = $("endSessionBtn");
-  if (nameEl) {
-    nameEl.textContent = name || "Untitled Session";
-    nameEl.style.display = "inline";
-  }
-  if (endBtn) {
-    endBtn.style.display = "inline-block";
+  if (serverState?.pdf) {
+    loadPdf(serverState.pdf, serverState.currentSlide);
+  } else {
+    setSetupMode("upload");
   }
 }
 
-function renameSession(newName) {
-  if (!socket || !state.sessionId) return;
-  socket.emit("rename-session", { sessionId: state.sessionId, name: newName });
+function showSessionName(name) {
+  dom.sessionName.textContent = name || "Untitled Session";
+  dom.sessionName.hidden = false;
 }
 
-// ─── WebSocket ────────────────────────────────────────────────────────────────
+async function endSession() {
+  if (!confirm("End this session? All viewers and remotes will be disconnected.")) return;
+  if (state.socket?.connected) await request(state.socket, "end-session");
+  leaveSession("/");
+}
 
-let socket;
+/** Forgets the session locally and navigates away. */
+function leaveSession(location) {
+  forgetSession();
+  state.socket?.disconnect();
+  window.location.href = location;
+}
+
+async function renameSession() {
+  if (!state.joined) return;
+  const name = prompt("Session name:", dom.sessionName.textContent);
+  if (name === null || !name.trim()) return;
+  const res = await request(state.socket, "rename-session", { name });
+  if (!res.ok) toast(res.message || "Could not rename the session");
+}
+
+// ─── Socket ───────────────────────────────────────────────────────────────────
 
 function connectSocket() {
-  socket = io({ transports: ["websocket", "polling"] });
+  const socket = window.io({ transports: ["websocket", "polling"] });
+  state.socket = socket;
 
-  socket.on("connect", () => {
-    socket.emit("join-session", {
-      sessionId: state.sessionId,
+  socket.on("connect", async () => {
+    const res = await request(socket, "join-session", {
+      sessionId: state.session.sessionId,
       role: "presenter",
+      presenterToken: state.session.presenterToken,
     });
+    if (!res.ok) {
+      state.joined = false;
+      if (res.code === "SESSION_NOT_FOUND" || res.code === "FORBIDDEN") {
+        toast("This session no longer exists — starting over");
+        setTimeout(() => leaveSession("/"), 2000);
+      } else {
+        toast(res.message || "Could not join the session");
+      }
+      return;
+    }
+
+    state.joined = true;
+    updatePresence(res.state);
+    syncTotalSlides();
+    // After a reconnect the server is the source of truth for the position.
+    if (state.doc && res.state.currentSlide !== state.currentSlide) showSlide(res.state.currentSlide);
   });
 
-  // Remote sent a slide change command
+  socket.on("disconnect", (reason) => {
+    state.joined = false;
+    if (reason !== "io client disconnect" && reason !== "io server disconnect") {
+      toast("Connection lost — reconnecting…");
+    }
+  });
+
   socket.on("slide-update", ({ currentSlide }) => {
-    if (currentSlide !== state.currentSlide) {
-      goToSlide(currentSlide, "remote");
-    }
+    if (currentSlide !== state.currentSlide) showSlide(currentSlide, { animate: true });
   });
 
-  // New PDF loaded (from another tab / device)
-  socket.on("pdf-loaded", ({ pdfUrl, filename }) => {
-    loadPdfFromUrl(pdfUrl, filename, { skipNotify: true });
+  socket.on("presence", updatePresence);
+  socket.on("session-renamed", ({ name }) => showSessionName(name));
+  socket.on("cursor-move", moveCursor);
+
+  socket.on("remote-pending", ({ remoteSocketId, deviceLabel }) => {
+    if (state.pendingRemotes.some((p) => p.remoteSocketId === remoteSocketId)) return;
+    state.pendingRemotes.push({ remoteSocketId, deviceLabel });
+    notificationSound.currentTime = 0;
+    notificationSound.play().catch(() => {}); // autoplay may be blocked until first interaction
+    renderApprovalDialog();
   });
 
-  // Laser pointer from remote
-  socket.on("pointer-update", ({ x, y, active }) => {
-    if (active) {
-      const rect = canvas.getBoundingClientRect();
-      laserDot.style.display = "block";
-      laserDot.style.left = x * rect.width + "px";
-      laserDot.style.top = y * rect.height + "px";
-    } else {
-      laserDot.style.display = "none";
-    }
-  });
+  socket.on("remote-request-cancelled", ({ remoteSocketId }) => dropPending(remoteSocketId));
 
-  // Artificial cursor from remote
-  socket.on("cursor-move", ({ x, y, active }) => {
-    if (active) {
-      const rect = canvas.getBoundingClientRect();
-      // Clamp coordinates to keep cursor within slide boundaries (0-1 range)
-      const clampedX = Math.max(0, Math.min(1, x));
-      const clampedY = Math.max(0, Math.min(1, y));
-      const cursorX = clampedX * rect.width;
-      const cursorY = clampedY * rect.height;
-
-      // Direct update for maximum responsiveness
-      artificialCursor.style.left = cursorX + "px";
-      artificialCursor.style.top = cursorY + "px";
-      artificialCursor.classList.add("active");
-    } else {
-      artificialCursor.classList.remove("active");
-    }
-  });
-
-  socket.on("connect_error", () => showToast("WebSocket connection lost", "warning"));
-
-  socket.on("remote-count", ({ count }) => {
-    state.connectedRemotes = count;
-    connCount.textContent = `${count} remote(s) connected · ${state.connectedViewers} viewer(s)`;
-  });
-
-  socket.on("viewer-count", ({ count }) => {
-    state.connectedViewers = count;
-    connCount.textContent = `${state.connectedRemotes} remote(s) connected · ${count} viewer(s)`;
-  });
-
-  //  Remote approval system
-  socket.on("remote-pending", ({ socketId, deviceId, count }) => {
-    // Play notification sound
-    const audio = new Audio("/notification.wav");
-    audio.play().catch(() => {}); // Ignore autoplay restrictions
-    showRemoteApprovalDialog(socketId, deviceId, count);
-  });
-
-  socket.on("remote-accepted", ({ remoteSocketId }) => {
-    showToast(`Remote ${remoteSocketId.slice(0, 8)}... accepted`);
-  });
-
-  socket.on("remote-rejected", ({ remoteSocketId }) => {
-    showToast(`Remote ${remoteSocketId.slice(0, 8)}... rejected`);
-  });
-
-  // Session renamed
-  socket.on("session-renamed", ({ name }) => {
-    updateSessionNameDisplay(name);
-    showToast(`Session renamed to "${name}"`);
-  });
-
-  // Session ended (from another tab or explicit end)
   socket.on("session-ended", ({ message }) => {
-    clearSessionFromStorage();
-    showToast(`${message}`);
-    setTimeout(() => {
-      window.location.href = "/";
-    }, 2000);
+    toast(message || "Session ended");
+    setTimeout(() => leaveSession("/"), 2000);
+  });
+
+  socket.on("presenter-replaced", () => {
+    state.joined = false;
+    setSetupMode("replaced");
   });
 }
 
-// ─── Remote Approval UI ───────────────────────────────────────────────────────
-
-let pendingRemotes = [];
-let remoteRequestsEnabled = true; // Local state for toggle
-
-function showRemoteApprovalDialog(socketId, deviceId, count) {
-  pendingRemotes.push({ socketId, deviceId });
-
-  // Create or update the approval dialog
-  let dialog = $("remoteApprovalDialog");
-  if (!dialog) {
-    dialog = document.createElement("div");
-    dialog.id = "remoteApprovalDialog";
-    dialog.className = "remote-approval-dialog";
-    document.body.appendChild(dialog);
-  }
-
-  // Show device ID for identification
-  const displayId = deviceId ? deviceId.slice(0, 8) : socketId.slice(0, 12);
-
-  // Escape HTML to prevent XSS
-  const escapeHtml = (text) => {
-    const div = document.createElement("div");
-    div.textContent = text;
-    return div.innerHTML;
-  };
-
-  const pending = pendingRemotes[0];
-
-  dialog.innerHTML = `
-    <div class="remote-approval-content">
-      <div class="remote-approval-header">
-        <h3><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 8px;"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg> Remote Access Request</h3>
-        <button class="btn-close" onclick="dismissRemoteDialog()" title="Dismiss"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-      </div>
-      <p>${escapeHtml(String(count))} remote(s) waiting</p>
-      <p class="remote-id">Device: ${escapeHtml(displayId)}...</p>
-      <div class="remote-approval-buttons">
-        <button class="btn-approve" onclick="approveRemote('${escapeHtml(pending.socketId)}')">Accept</button>
-        <button class="btn-reject" onclick="rejectRemote('${escapeHtml(pending.socketId)}')">Reject</button>
-        <button class="btn-block" onclick="blockRemote('${escapeHtml(pending.socketId)}', '${escapeHtml(pending.deviceId || "")}')" title="Block this device">Block</button>
-      </div>
-    </div>
-  `;
-  dialog.style.display = "block";
+function updatePresence({ viewerCount = 0, remoteCount = 0 } = {}) {
+  dom.viewerCount.textContent = `${viewerCount} viewer${viewerCount === 1 ? "" : "s"} connected`;
+  dom.remoteCount.textContent = `${remoteCount} remote${remoteCount === 1 ? "" : "s"} connected`;
 }
 
-function approveRemote(socketId) {
-  socket.emit("remote-accept", { sessionId: state.sessionId, remoteSocketId: socketId });
-  hideRemoteApprovalDialog(socketId);
-}
-
-function rejectRemote(socketId) {
-  socket.emit("remote-reject", { sessionId: state.sessionId, remoteSocketId: socketId });
-  hideRemoteApprovalDialog(socketId);
-}
-
-function blockRemote(socketId, deviceId) {
-  if (deviceId) {
-    socket.emit("remote-block", { sessionId: state.sessionId, deviceId });
-    showToast("Device blocked from future requests");
-  }
-  // Also reject the current request
-  socket.emit("remote-reject", { sessionId: state.sessionId, remoteSocketId: socketId });
-  hideRemoteApprovalDialog(socketId);
-}
-
-function dismissRemoteDialog() {
-  const dialog = $("remoteApprovalDialog");
-  if (dialog) dialog.style.display = "none";
-}
-
-function hideRemoteApprovalDialog(socketId) {
-  pendingRemotes = pendingRemotes.filter(r => r.socketId !== socketId);
-  const dialog = $("remoteApprovalDialog");
-  if (dialog && pendingRemotes.length === 0) {
-    dialog.style.display = "none";
-  } else if (dialog && pendingRemotes.length > 0) {
-    // Show next pending remote
-    showRemoteApprovalDialog(pendingRemotes[0].socketId, pendingRemotes[0].deviceId, pendingRemotes.length);
+/** Reports the page count once both the socket and the document are ready. */
+function syncTotalSlides() {
+  if (state.joined && state.doc) {
+    request(state.socket, "set-total-slides", { totalSlides: state.doc.numPages });
   }
 }
 
-// Toggle remote requests on/off
-function toggleRemoteRequests() {
-  remoteRequestsEnabled = !remoteRequestsEnabled;
-  socket.emit("toggle-remote-requests", { sessionId: state.sessionId, enabled: remoteRequestsEnabled });
-  showToast(remoteRequestsEnabled ? "Remote requests enabled" : "Remote requests disabled");
-  // Update button if it exists
-  const btn = $("toggleRemoteRequestsBtn");
-  if (btn) {
-    btn.textContent = remoteRequestsEnabled ? "Disable Remote Requests" : "Enable Remote Requests";
-    btn.style.background = remoteRequestsEnabled ? "var(--danger)" : "var(--success)";
-  }
+function moveCursor({ x, y, active }) {
+  dom.cursor.classList.toggle("active", Boolean(active));
+  if (!active) return;
+  dom.cursor.style.left = `${x * 100}%`;
+  dom.cursor.style.top = `${y * 100}%`;
 }
 
-// ─── PDF Upload ───────────────────────────────────────────────────────────────
+// ─── Remote approval ──────────────────────────────────────────────────────────
 
-// Drag & drop handlers
-uploadZone.addEventListener("dragover", (e) => {
-  e.preventDefault();
-  uploadZone.classList.add("drag-over");
-});
-uploadZone.addEventListener("dragleave", () =>
-  uploadZone.classList.remove("drag-over"),
-);
-uploadZone.addEventListener("drop", (e) => {
-  e.preventDefault();
-  uploadZone.classList.remove("drag-over");
-  const files = Array.from(e.dataTransfer.files).filter(
-    (f) => f.type === "application/pdf",
-  );
-  if (files.length) handleFileSelect(files[0]);
-});
-uploadZone.addEventListener("click", (e) => {
-  if (e.target !== fileInput) fileInput.click();
-});
-fileInput.addEventListener("change", () => {
-  if (fileInput.files[0]) handleFileSelect(fileInput.files[0]);
-});
+function renderApprovalDialog() {
+  const head = state.pendingRemotes[0];
+  dom.approvalDialog.hidden = !head;
+  if (!head) return;
+  const count = state.pendingRemotes.length;
+  dom.approvalCount.textContent = `${count} remote${count === 1 ? "" : "s"} waiting`;
+  dom.approvalDevice.textContent = `Device ${head.deviceLabel}`;
+}
 
-function handleFileSelect(file) {
-  if (!file || file.type !== "application/pdf") {
-    showToast("Please select a valid PDF file");
+function dropPending(remoteSocketId) {
+  state.pendingRemotes = state.pendingRemotes.filter((p) => p.remoteSocketId !== remoteSocketId);
+  renderApprovalDialog();
+}
+
+/** @param {"remote-accept"|"remote-reject"|"remote-block"} event */
+async function answerPending(event) {
+  const head = state.pendingRemotes[0];
+  if (!head || !state.joined) return;
+  dropPending(head.remoteSocketId);
+  const res = await request(state.socket, event, { remoteSocketId: head.remoteSocketId });
+  if (!res.ok) toast(res.message || "Request no longer available");
+  else if (event === "remote-accept") toast(`Remote ${head.deviceLabel} connected`);
+  else if (event === "remote-block") toast(`Device ${head.deviceLabel} blocked`);
+}
+
+async function toggleRemoteRequests() {
+  if (!state.joined) return;
+  const res = await request(state.socket, "toggle-remote-requests", { enabled: !state.remoteRequestsEnabled });
+  if (!res.ok) return toast(res.message || "Could not change the setting");
+  state.remoteRequestsEnabled = res.enabled;
+  dom.toggleRemoteRequestsBtn.querySelector("span").textContent = res.enabled
+    ? "Disable remote requests"
+    : "Enable remote requests";
+  dom.toggleRemoteRequestsBtn.classList.toggle("btn-danger", res.enabled);
+  dom.toggleRemoteRequestsBtn.classList.toggle("btn-success", !res.enabled);
+  toast(res.enabled ? "Remote requests enabled" : "Remote requests disabled");
+}
+
+// ─── Upload ───────────────────────────────────────────────────────────────────
+
+const isPdfFile = (file) => file && (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"));
+
+function handleFile(file) {
+  if (!isPdfFile(file)) {
+    toast("Please choose a PDF file");
     return;
   }
   uploadFile(file);
 }
 
-async function uploadFile(file) {
-  progressDiv.style.display = "block";
-  progressFill.style.width = "0%";
-  progressLabel.textContent = "Uploading…";
+/** Uploads with XMLHttpRequest because fetch() cannot report upload progress. */
+function uploadFile(file) {
+  const { sessionId, presenterToken } = state.session;
+  const form = new FormData();
+  form.append("pdf", file);
 
-  // Show the setup overlay in swap mode (keeps session alive)
-  showSwapOverlay();
+  dom.uploadProgress.hidden = false;
+  dom.progressFill.style.width = "0%";
+  dom.progressLabel.textContent = "Uploading…";
+  dom.uploadZone.classList.add("busy");
 
-  const formData = new FormData();
-  formData.append("pdf", file);
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", `/api/upload/${sessionId}`);
+  xhr.setRequestHeader("X-Requested-With", "XMLHttpRequest");
+  xhr.setRequestHeader("X-Presenter-Token", presenterToken);
+  xhr.responseType = "json";
 
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", `/api/upload/${state.sessionId}`);
-    xhr.setRequestHeader("X-Upload-Token", state.uploadToken); //  Auth header
-    xhr.setRequestHeader("X-Requested-With", "XMLHttpRequest"); //  CSRF protection
+  xhr.upload.onprogress = (e) => {
+    if (!e.lengthComputable) return;
+    const pct = Math.round((e.loaded / e.total) * 90);
+    dom.progressFill.style.width = `${pct}%`;
+    dom.progressLabel.textContent = `Uploading… ${pct}%`;
+  };
 
-    xhr.upload.onprogress = (e) => {
-      const pct = Math.round((e.loaded / e.total) * 90);
-      progressFill.style.width = pct + "%";
-      progressLabel.textContent = `Uploading… ${pct}%`;
-    };
+  const fail = (message) => {
+    dom.uploadZone.classList.remove("busy");
+    dom.uploadProgress.hidden = true;
+    dom.fileInput.value = "";
+    toast(message);
+  };
 
-    xhr.onload = async () => {
-      if (xhr.status === 200) {
-        const data = JSON.parse(xhr.responseText);
-        progressFill.style.width = "100%";
-        progressLabel.textContent = "Processing PDF…";
-        await loadPdfFromUrl(data.pdfUrl, data.filename);
-        resolve(data);
-      } else {
-        showToast(
-          "Upload failed: " +
-            (JSON.parse(xhr.responseText)?.error || "Unknown error"),
-        );
-        progressDiv.style.display = "none";
-        hideSwapOverlay();
-        reject();
-      }
-    };
-
-    xhr.onerror = () => {
-      showToast("Network error during upload");
-      hideSwapOverlay();
-      reject();
-    };
-    xhr.send(formData);
-  });
+  xhr.onload = async () => {
+    const body = xhr.response || {};
+    if (xhr.status !== 201) return fail(`Upload failed: ${body.error || `HTTP ${xhr.status}`}`);
+    dom.progressFill.style.width = "100%";
+    dom.progressLabel.textContent = "Opening PDF…";
+    await loadPdf(body.pdf, 1);
+    dom.uploadZone.classList.remove("busy");
+  };
+  xhr.onerror = () => fail("Network error during upload");
+  xhr.send(form);
 }
 
-// ─── Swap Overlay Helpers ─────────────────────────────────────────────────────
+// ─── PDF ──────────────────────────────────────────────────────────────────────
 
 /**
- * Show the setup overlay in "swap" mode — the session stays alive,
- * we just let the presenter pick a new PDF.
+ * Opens a PDF and shows the given slide.
+ * @param {{ url: string, name: string }} pdf
+ * @param {number} slide
  */
-function showSwapOverlay() {
-  setupOverlay.classList.remove("hide");
-  setupOverlay.dataset.swapMode = "true";
-
-  // Show a cancel button when swapping (not on first load)
-  if (state.pdfDoc) {
-    let cancelBtn = $("swapCancelBtn");
-    if (!cancelBtn) {
-      cancelBtn = document.createElement("button");
-      cancelBtn.id = "swapCancelBtn";
-      cancelBtn.className = "btn swap-cancel-btn";
-      cancelBtn.textContent = "Cancel";
-      cancelBtn.addEventListener("click", hideSwapOverlay);
-      setupOverlay.querySelector(".setup-card").appendChild(cancelBtn);
-    }
-    cancelBtn.style.display = "inline-flex";
-  }
-}
-
-function hideSwapOverlay() {
-  // Only hide if a PDF is already loaded
-  if (state.pdfDoc) {
-    setupOverlay.classList.add("hide");
-    delete setupOverlay.dataset.swapMode;
-    progressDiv.style.display = "none";
-    const cancelBtn = $("swapCancelBtn");
-    if (cancelBtn) cancelBtn.style.display = "none";
-    // Reset file input so same file can be re-selected
-    fileInput.value = "";
-  }
-}
-
-// ─── PDF Rendering ────────────────────────────────────────────────────────────
-
-async function loadPdfFromUrl(url, filename = "", { skipNotify = false } = {}) {
+async function loadPdf(pdf, slide) {
   try {
-    const loadingTask = pdfjsLib.getDocument(url);
-    const pdfDoc = await loadingTask.promise;
+    const doc = await openDocument(pdf.url);
+    renderer.setDocument(doc);
+    state.doc = doc;
+    state.totalSlides = doc.numPages;
+    state.currentSlide = Math.min(Math.max(1, slide), doc.numPages);
 
-    state.pdfDoc = pdfDoc;
-    state.totalSlides = pdfDoc.numPages;
-    state.currentSlide = 1;
+    setSetupMode("hidden");
+    dom.uploadProgress.hidden = true;
+    dom.fileInput.value = "";
+    dom.changePdfBtn.hidden = false;
 
-    if (socket?.connected && !skipNotify) {
-      socket.emit("set-total-slides", {
-        sessionId: state.sessionId,
-        totalSlides: pdfDoc.numPages,
-      });
-      socket.emit("pdf-file-loaded", {
-        sessionId: state.sessionId,
-        pdfUrl: url,
-        filename: filename || "Presentation.pdf",
-      });
-    }
-
-    // Hide setup overlay and swap overlay
-    setupOverlay.classList.add("hide");
-    delete setupOverlay.dataset.swapMode;
-    progressDiv.style.display = "none";
-    const cancelBtn = $("swapCancelBtn");
-    if (cancelBtn) cancelBtn.style.display = "none";
-    fileInput.value = "";
-
-    // Render first slide
-    await renderSlide(1);
-
-    // Build thumbnail strip (async, non-blocking)
-    buildThumbnailStrip();
-
-    showToast(`${filename || "PDF"} loaded — ${pdfDoc.numPages} slides`);
+    await renderer.show(state.currentSlide);
+    updateCounter();
+    buildThumbnailStrip(doc);
+    syncTotalSlides();
+    toast(`${pdf.name} — ${doc.numPages} slide${doc.numPages === 1 ? "" : "s"}`);
   } catch (err) {
-    console.error("PDF load error:", err);
-    showToast("Failed to load PDF: " + err.message);
-    progressDiv.style.display = "none";
-    hideSwapOverlay();
+    console.error("[presenter] PDF load failed", err);
+    toast(`Could not open the PDF: ${err.message}`);
+    dom.uploadProgress.hidden = true;
+    setSetupMode(state.doc ? "hidden" : "upload");
   }
 }
-
-async function renderSlide(pageNum) {
-  if (!state.pdfDoc || state.rendering) return;
-  if (pageNum < 1 || pageNum > state.totalSlides) return;
-
-  state.rendering = true;
-
-  try {
-    const page = await state.pdfDoc.getPage(pageNum);
-    const inFS = !!document.fullscreenElement;
-
-    const maxW = inFS ? slideArea.clientWidth : slideArea.clientWidth - 60;
-    const maxH = inFS ? slideArea.clientHeight : slideArea.clientHeight - 40;
-
-    const viewport = page.getViewport({ scale: 1 });
-    const scale = Math.min(maxW / viewport.width, maxH / viewport.height);
-    const vp = page.getViewport({ scale });
-
-    canvas.width = vp.width;
-    canvas.height = vp.height;
-
-    if (state.renderTask) state.renderTask.cancel();
-    state.renderTask = page.render({ canvasContext: ctx, viewport: vp });
-
-    await state.renderTask.promise;
-    state.renderTask = null;
-
-    await setupLinkHandlers(page, vp);
-
-    state.currentSlide = pageNum;
-    updateCounterUI();
-    updateStripHighlight();
-  } catch (err) {
-    if (err?.name !== "RenderingCancelledException") {
-      console.error("Render error:", err);
-    }
-  } finally {
-    state.rendering = false;
-  }
-}
-
-// ─── PDF Link Handling ────────────────────────────────────────────────────────
-
-let currentLinks = [];
-let linkHighlightCanvas = null;
-let linkHighlightCtx = null;
-
-function createLinkHighlightCanvas() {
-  if (!linkHighlightCanvas) {
-    linkHighlightCanvas = document.createElement("canvas");
-    linkHighlightCanvas.style.position = "absolute";
-    linkHighlightCanvas.style.top = "0";
-    linkHighlightCanvas.style.left = "0";
-    linkHighlightCanvas.style.pointerEvents = "none";
-    linkHighlightCanvas.style.zIndex = "10";
-    linkHighlightCtx = linkHighlightCanvas.getContext("2d");
-    slideWrapper.appendChild(linkHighlightCanvas);
-  }
-}
-
-async function setupLinkHandlers(page, viewport) {
-  try {
-    const annotations = await page.getAnnotations();
-    currentLinks = [];
-
-    for (const annotation of annotations) {
-      if (annotation.subtype === "Link") {
-        const rect = viewport.convertToViewportRectangle(annotation.rect);
-        const [x1, y1, x2, y2] = rect;
-
-        currentLinks.push({
-          x: Math.min(x1, x2),
-          y: Math.min(y1, y2),
-          width: Math.abs(x2 - x1),
-          height: Math.abs(y2 - y1),
-          url: annotation.url || (annotation.action && annotation.action.url),
-        });
-      }
-    }
-
-    createLinkHighlightCanvas();
-    updateLinkHighlight();
-  } catch (err) {
-    console.warn("Could not load link annotations:", err);
-    currentLinks = [];
-  }
-}
-
-function updateLinkHighlight(hoveredLink = null) {
-  if (!linkHighlightCtx) return;
-
-  linkHighlightCtx.clearRect(
-    0,
-    0,
-    linkHighlightCanvas.width,
-    linkHighlightCanvas.height,
-  );
-
-  if (hoveredLink === null || !currentLinks.length) return;
-
-  linkHighlightCanvas.width = canvas.width;
-  linkHighlightCanvas.height = canvas.height;
-
-  const link = currentLinks[hoveredLink];
-
-  linkHighlightCtx.fillStyle = "rgba(59, 130, 246, 0.3)";
-  linkHighlightCtx.fillRect(link.x, link.y, link.width, link.height);
-
-  linkHighlightCtx.strokeStyle = "rgba(59, 130, 246, 0.8)";
-  linkHighlightCtx.lineWidth = 2;
-  linkHighlightCtx.strokeRect(link.x, link.y, link.width, link.height);
-}
-
-canvas.addEventListener("click", (e) => {
-  const rect = canvas.getBoundingClientRect();
-  const x = (e.clientX - rect.left) * (canvas.width / rect.width);
-  const y = (e.clientY - rect.top) * (canvas.height / rect.height);
-
-  // Check if clicking on a link
-  let clickedLink = false;
-  for (const link of currentLinks) {
-    if (
-      x >= link.x &&
-      x <= link.x + link.width &&
-      y >= link.y &&
-      y <= link.y + link.height
-    ) {
-      clickedLink = true;
-      if (link.url) {
-        window.open(link.url, "_blank", "noopener,noreferrer");
-      }
-      break;
-    }
-  }
-
-  // If not clicking on a link, go to next slide
-  if (!clickedLink) {
-    nextSlide();
-  }
-});
-
-canvas.addEventListener("mousemove", (e) => {
-  if (!currentLinks.length) {
-    canvas.style.cursor = "default";
-    updateLinkHighlight();
-    return;
-  }
-
-  const rect = canvas.getBoundingClientRect();
-  const x = (e.clientX - rect.left) * (canvas.width / rect.width);
-  const y = (e.clientY - rect.top) * (canvas.height / rect.height);
-
-  let hoveredLinkIndex = -1;
-  for (let i = 0; i < currentLinks.length; i++) {
-    const link = currentLinks[i];
-    if (
-      x >= link.x &&
-      x <= link.x + link.width &&
-      y >= link.y &&
-      y <= link.y + link.height
-    ) {
-      hoveredLinkIndex = i;
-      break;
-    }
-  }
-
-  canvas.style.cursor = hoveredLinkIndex >= 0 ? "pointer" : "default";
-  updateLinkHighlight(hoveredLinkIndex >= 0 ? hoveredLinkIndex : null);
-});
-
-canvas.addEventListener("mouseleave", () => {
-  updateLinkHighlight();
-});
 
 // ─── Navigation ───────────────────────────────────────────────────────────────
 
-async function goToSlide(num, source = "local") {
-  if (!state.pdfDoc) return;
-  num = Math.max(1, Math.min(num, state.totalSlides));
-  if (num === state.currentSlide) return;
+/** Changes slide locally and tells the server. */
+function goToSlide(slide) {
+  if (!state.doc) return;
+  const target = Math.min(Math.max(1, slide), state.totalSlides);
+  if (target === state.currentSlide) return;
+  showSlide(target, { animate: true });
+  if (state.joined) request(state.socket, "slide-change", { slide: target });
+}
 
-  transOverlay.classList.add("flash");
-  setTimeout(() => transOverlay.classList.remove("flash"), 180);
+/** Shows a slide without notifying the server (used for remote-driven changes). */
+function showSlide(slide, { animate = false } = {}) {
+  state.currentSlide = Math.min(Math.max(1, slide), state.totalSlides || slide);
+  if (animate) {
+    dom.transition.classList.add("flash");
+    setTimeout(() => dom.transition.classList.remove("flash"), 180);
+  }
+  updateCounter();
+  renderer.show(state.currentSlide);
+}
 
-  await renderSlide(num);
+const nextSlide = () => goToSlide(state.currentSlide + 1);
+const prevSlide = () => goToSlide(state.currentSlide - 1);
 
-  if (source === "local" && socket?.connected) {
-    socket.emit("slide-change", {
-      sessionId: state.sessionId,
-      slide: num,
-    });
+function updateCounter() {
+  dom.slideCounter.textContent = state.totalSlides ? `${state.currentSlide} / ${state.totalSlides}` : "— / —";
+  dom.prevBtn.disabled = state.currentSlide <= 1;
+  dom.nextBtn.disabled = state.currentSlide >= state.totalSlides;
+  highlightThumbnail();
+}
+
+// ─── Thumbnails ───────────────────────────────────────────────────────────────
+
+let thumbObserver = null;
+
+/** Builds the strip; thumbnails render lazily when scrolled into view. */
+function buildThumbnailStrip(doc) {
+  thumbObserver?.disconnect();
+  dom.slideStrip.replaceChildren();
+
+  thumbObserver = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        thumbObserver.unobserve(entry.target);
+        const canvas = entry.target.querySelector("canvas");
+        renderThumbnail(doc, Number(entry.target.dataset.page), canvas, THUMB_HEIGHT_PX).catch(() => {});
+      }
+    },
+    { root: dom.slideStrip, rootMargin: "0px 300px" },
+  );
+
+  const fragment = document.createDocumentFragment();
+  for (let page = 1; page <= doc.numPages; page++) {
+    const thumb = document.createElement("button");
+    thumb.type = "button";
+    thumb.className = "strip-thumb";
+    thumb.dataset.page = String(page);
+    thumb.title = `Slide ${page}`;
+    thumb.setAttribute("aria-label", `Go to slide ${page}`);
+    thumb.appendChild(document.createElement("canvas"));
+    fragment.appendChild(thumb);
+    thumbObserver.observe(thumb);
+  }
+  dom.slideStrip.appendChild(fragment);
+  highlightThumbnail();
+}
+
+function highlightThumbnail() {
+  const previous = dom.slideStrip.querySelector(".strip-thumb.active");
+  const current = dom.slideStrip.querySelector(`.strip-thumb[data-page="${state.currentSlide}"]`);
+  if (previous === current) return;
+  previous?.classList.remove("active");
+  if (!current) return;
+  current.classList.add("active");
+  current.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+}
+
+// ─── PDF links ────────────────────────────────────────────────────────────────
+
+/** Overlays clickable areas for the page's link annotations. */
+async function renderLinkLayer(page) {
+  const paintId = ++state.paintId;
+  let annotations = [];
+  try {
+    annotations = await page.getAnnotations({ intent: "display" });
+  } catch {
+    /* annotations are optional */
+  }
+  if (paintId !== state.paintId) return;
+
+  const base = page.getViewport({ scale: 1 });
+  const links = [];
+  for (const annotation of annotations) {
+    if (annotation.subtype !== "Link") continue;
+    const [x1, y1, x2, y2] = base.convertToViewportRectangle(annotation.rect);
+    const link = document.createElement("a");
+    link.className = "pdf-link";
+    link.style.left = `${(Math.min(x1, x2) / base.width) * 100}%`;
+    link.style.top = `${(Math.min(y1, y2) / base.height) * 100}%`;
+    link.style.width = `${(Math.abs(x2 - x1) / base.width) * 100}%`;
+    link.style.height = `${(Math.abs(y2 - y1) / base.height) * 100}%`;
+
+    if (annotation.url) {
+      let url;
+      try {
+        url = new URL(annotation.url);
+      } catch {
+        continue;
+      }
+      if (!SAFE_LINK_PROTOCOLS.has(url.protocol)) continue;
+      link.href = url.href;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.title = url.href;
+    } else if (annotation.dest) {
+      link.href = "#";
+      link.title = "Go to linked slide";
+      link.addEventListener("click", (e) => {
+        e.preventDefault();
+        followInternalLink(annotation.dest);
+      });
+    } else {
+      continue;
+    }
+    link.addEventListener("click", (e) => e.stopPropagation());
+    links.push(link);
+  }
+  dom.linkLayer.replaceChildren(...links);
+}
+
+/** Navigates to the page targeted by an internal PDF link. */
+async function followInternalLink(dest) {
+  try {
+    const explicit = typeof dest === "string" ? await state.doc.getDestination(dest) : dest;
+    if (!Array.isArray(explicit)) return;
+    const pageIndex = await state.doc.getPageIndex(explicit[0]);
+    goToSlide(pageIndex + 1);
+  } catch {
+    /* broken destination */
   }
 }
 
-function nextSlide() {
-  goToSlide(state.currentSlide + 1);
-}
-function prevSlide() {
-  goToSlide(state.currentSlide - 1);
+// ─── Share modals ─────────────────────────────────────────────────────────────
+
+/** Builds a share URL, replacing the host with the configured LAN IP if any. */
+function shareUrl(kind) {
+  const base = kind === "viewer" ? state.session?.viewerUrl : state.session?.remoteUrl;
+  if (!base) return "";
+  const url = new URL(base);
+  const ip = local.get(IP_KEY);
+  if (ip) url.hostname = ip;
+  if (kind === "viewer") url.searchParams.set("orient", state.orientation);
+  return url.toString();
 }
 
-nextBtn.addEventListener("click", nextSlide);
-prevBtn.addEventListener("click", prevSlide);
+function refreshShareCodes() {
+  const remoteUrl = shareUrl("remote");
+  dom.remoteUrlDisplay.textContent = remoteUrl || "—";
+  if (!dom.remoteModal.hidden) drawQr(dom.qrCanvas, remoteUrl);
+
+  const viewerUrl = shareUrl("viewer");
+  dom.viewerUrlDisplay.textContent = viewerUrl || "—";
+  if (!dom.viewerModal.hidden) drawQr(dom.viewerQrCanvas, viewerUrl);
+}
+
+function openModal(modal) {
+  modal.hidden = false;
+  refreshShareCodes();
+  modal.querySelector(".modal-close")?.focus();
+}
+
+function closeModals() {
+  dom.remoteModal.hidden = true;
+  dom.viewerModal.hidden = true;
+}
+
+const anyModalOpen = () => !dom.remoteModal.hidden || !dom.viewerModal.hidden;
+
+async function openRemoteModal() {
+  const savedIp = local.get(IP_KEY);
+  dom.ipInput.value = savedIp || "";
+  openModal(dom.remoteModal);
+  if (savedIp || !state.session) return;
+
+  // Suggest the machine's LAN address so phones can reach the server.
+  const { ok, data } = await api(`/api/session/${state.session.sessionId}/network`, {
+    headers: { "X-Presenter-Token": state.session.presenterToken },
+  });
+  if (!ok || !data.addresses?.length) return;
+  dom.ipInput.value = data.addresses[0].address;
+  if (data.addresses.length > 1) {
+    dom.ipSelector.replaceChildren(
+      ...data.addresses.map(({ address, interface: name }) => new Option(`${address} (${name})`, address)),
+    );
+    dom.ipSelector.hidden = false;
+    dom.ipNote.textContent = "Several networks detected — pick the one your phone uses, then Apply";
+  } else {
+    dom.ipNote.textContent = "Detected LAN address — click Apply to use it in the QR code";
+  }
+  dom.ipNote.style.color = "var(--text-3)";
+}
+
+function applyIp() {
+  const ip = dom.ipInput.value.trim();
+  if (ip && !/^[A-Za-z0-9.-]{1,253}$|^\[?[0-9a-fA-F:]+\]?$/.test(ip)) {
+    dom.ipNote.textContent = "That does not look like an IP address or host name";
+    dom.ipNote.style.color = "var(--danger)";
+    return;
+  }
+  if (ip) local.set(IP_KEY, ip);
+  else local.remove(IP_KEY);
+  refreshShareCodes();
+  dom.ipNote.textContent = ip ? `QR code now points to ${ip}` : "Using the address in your browser bar";
+  dom.ipNote.style.color = ip ? "var(--success)" : "var(--text-3)";
+}
+
+function setOrientation(orientation) {
+  state.orientation = orientation;
+  local.set(ORIENTATION_KEY, orientation);
+  dom.orientLandscape.classList.toggle("active", orientation === "landscape");
+  dom.orientPortrait.classList.toggle("active", orientation === "portrait");
+  dom.orientLandscape.setAttribute("aria-pressed", String(orientation === "landscape"));
+  dom.orientPortrait.setAttribute("aria-pressed", String(orientation === "portrait"));
+  refreshShareCodes();
+}
+
+async function copyShareUrl(kind) {
+  const url = shareUrl(kind);
+  if (!url) return;
+  toast((await copyText(url)) ? "Link copied" : "Copy failed — select the link manually");
+}
+
+// ─── Fullscreen & resizing ────────────────────────────────────────────────────
+
+function toggleFullscreen() {
+  if (fullscreenElement()) exitFullscreen();
+  else enterFullscreen(document.documentElement);
+}
+
+onFullscreenChange(() => {
+  const active = Boolean(fullscreenElement());
+  dom.fullscreenBtn.innerHTML = active ? icons.exitFullscreen : icons.enterFullscreen;
+  dom.topbar.classList.toggle("hidden", active);
+  dom.slideStrip.classList.toggle("fs-hidden", active);
+  dom.slideWrapper.classList.toggle("fs-mode", active);
+});
+
+let resizeTimer = null;
+new ResizeObserver(() => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    if (state.doc) renderer.refresh();
+  }, 120);
+}).observe(dom.slideArea);
+
+// ─── Likes ────────────────────────────────────────────────────────────────────
+
+let hasLiked = false;
+
+function paintLikes({ count, hasLiked: liked }) {
+  hasLiked = Boolean(liked);
+  dom.likeCount.textContent = String(count);
+  dom.likeBtn.classList.toggle("liked", hasLiked);
+  dom.likeBtn.setAttribute("aria-pressed", String(hasLiked));
+}
+
+async function loadLikes() {
+  const { ok, data } = await api(`/api/likes?deviceId=${encodeURIComponent(getDeviceId())}`);
+  if (ok) paintLikes(data);
+}
+
+async function toggleLike() {
+  dom.likeBtn.disabled = true;
+  const { ok, data } = await api("/api/likes", {
+    method: "POST",
+    body: { deviceId: getDeviceId(), liked: !hasLiked },
+  });
+  dom.likeBtn.disabled = false;
+  if (ok) paintLikes(data);
+  else toast(data.error || "Could not save your like");
+}
+
+// ─── Event wiring ─────────────────────────────────────────────────────────────
+
+bindThemeToggles(dom.themeToggle, dom.setupThemeToggle);
+
+dom.startSessionBtn.addEventListener("click", startSession);
+for (const input of [dom.sessionNameInput, dom.sessionPasswordInput]) {
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") startSession();
+  });
+}
+dom.togglePasswordBtn.addEventListener("click", () => {
+  const show = dom.sessionPasswordInput.type === "password";
+  dom.sessionPasswordInput.type = show ? "text" : "password";
+  dom.togglePasswordBtn.innerHTML = show ? icons.eyeOff : icons.eye;
+  dom.togglePasswordBtn.title = show ? "Hide password" : "Show password";
+});
+
+// Upload zone: click, keyboard, drag & drop.
+dom.uploadZone.addEventListener("click", (e) => {
+  if (e.target.closest("label") || e.target === dom.fileInput) return;
+  dom.fileInput.click();
+});
+dom.uploadZone.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    dom.fileInput.click();
+  }
+});
+dom.uploadZone.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  dom.uploadZone.classList.add("drag-over");
+});
+dom.uploadZone.addEventListener("dragleave", () => dom.uploadZone.classList.remove("drag-over"));
+dom.uploadZone.addEventListener("drop", (e) => {
+  e.preventDefault();
+  dom.uploadZone.classList.remove("drag-over");
+  handleFile(e.dataTransfer.files[0]);
+});
+dom.fileInput.addEventListener("change", () => handleFile(dom.fileInput.files[0]));
+dom.swapCancelBtn.addEventListener("click", () => setSetupMode("hidden"));
+dom.changePdfBtn.addEventListener("click", () => setSetupMode("swap"));
+
+dom.likeBtn.addEventListener("click", toggleLike);
+
+// Top bar.
+dom.fullscreenBtn.addEventListener("click", toggleFullscreen);
+dom.endSessionBtn.addEventListener("click", endSession);
+dom.sessionName.addEventListener("click", renameSession);
+dom.showRemoteBtn.addEventListener("click", openRemoteModal);
+dom.showViewerBtn.addEventListener("click", () => {
+  setOrientation(state.orientation);
+  openModal(dom.viewerModal);
+});
+
+// Modals.
+for (const modal of [dom.remoteModal, dom.viewerModal]) {
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal || e.target.closest(".modal-close")) closeModals();
+  });
+}
+dom.applyIpBtn.addEventListener("click", applyIp);
+dom.ipInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") applyIp();
+});
+dom.ipSelector.addEventListener("change", () => {
+  dom.ipInput.value = dom.ipSelector.value;
+});
+dom.copyRemoteUrlBtn.addEventListener("click", () => copyShareUrl("remote"));
+dom.copyViewerUrlBtn.addEventListener("click", () => copyShareUrl("viewer"));
+dom.toggleRemoteRequestsBtn.addEventListener("click", toggleRemoteRequests);
+dom.orientLandscape.addEventListener("click", () => setOrientation("landscape"));
+dom.orientPortrait.addEventListener("click", () => setOrientation("portrait"));
+
+// Approval dialog.
+dom.approveBtn.addEventListener("click", () => answerPending("remote-accept"));
+dom.rejectBtn.addEventListener("click", () => answerPending("remote-reject"));
+dom.blockBtn.addEventListener("click", () => answerPending("remote-block"));
+dom.dismissApprovalBtn.addEventListener("click", () => {
+  dom.approvalDialog.hidden = true;
+});
+
+// Slide navigation.
+dom.prevBtn.addEventListener("click", prevSlide);
+dom.nextBtn.addEventListener("click", nextSlide);
+dom.canvas.addEventListener("click", nextSlide);
+dom.slideStrip.addEventListener("click", (e) => {
+  const thumb = e.target.closest(".strip-thumb");
+  if (thumb) goToSlide(Number(thumb.dataset.page));
+});
 
 document.addEventListener("keydown", (e) => {
-  if (remoteModal.style.display !== "none") return;
-  // Don't intercept keys when swap overlay is open
-  if (!setupOverlay.classList.contains("hide")) return;
+  if (e.key === "Escape") {
+    if (anyModalOpen()) closeModals();
+    else if (dom.setupOverlay.dataset.mode === "swap") setSetupMode("hidden");
+    return;
+  }
+  if (isTyping(e.target) || anyModalOpen() || !dom.setupOverlay.classList.contains("hide")) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+
   switch (e.key) {
     case "ArrowRight":
     case "ArrowDown":
-    case " ":
     case "PageDown":
+    case " ":
       e.preventDefault();
       nextSlide();
       break;
@@ -840,759 +914,43 @@ document.addEventListener("keydown", (e) => {
       e.preventDefault();
       prevSlide();
       break;
+    case "Home":
+      e.preventDefault();
+      goToSlide(1);
+      break;
+    case "End":
+      e.preventDefault();
+      goToSlide(state.totalSlides);
+      break;
     case "f":
     case "F":
       toggleFullscreen();
       break;
-    case "Escape":
-      if (remoteModal.style.display !== "none") closeRemoteModal();
-      else hideSwapOverlay();
-      break;
   }
 });
 
-let touchStartX = 0;
-slideArea.addEventListener(
+let touchStartX = null;
+dom.slideArea.addEventListener(
   "touchstart",
   (e) => {
-    touchStartX = e.touches[0].clientX;
+    touchStartX = e.touches.length === 1 ? e.touches[0].clientX : null;
   },
   { passive: true },
 );
-slideArea.addEventListener(
+dom.slideArea.addEventListener(
   "touchend",
   (e) => {
+    if (touchStartX === null) return;
     const dx = e.changedTouches[0].clientX - touchStartX;
-    if (Math.abs(dx) > 50) dx < 0 ? nextSlide() : prevSlide();
+    touchStartX = null;
+    if (Math.abs(dx) > SWIPE_THRESHOLD_PX) (dx < 0 ? nextSlide : prevSlide)();
   },
   { passive: true },
 );
-
-// ─── Counter & Strip ──────────────────────────────────────────────────────────
-
-function updateCounterUI() {
-  slideCounter.textContent = `${state.currentSlide} / ${state.totalSlides}`;
-  prevBtn.disabled = state.currentSlide <= 1;
-  nextBtn.disabled = state.currentSlide >= state.totalSlides;
-}
-
-async function buildThumbnailStrip() {
-  slideStrip.innerHTML = "";
-  const doc = state.pdfDoc;
-  if (!doc) return;
-
-  for (let i = 1; i <= doc.numPages; i++) {
-    const wrapper = document.createElement("div");
-    wrapper.className = "strip-thumb" + (i === 1 ? " active" : "");
-    wrapper.dataset.page = i;
-    wrapper.title = `Slide ${i}`;
-
-    const thumbCanvas = document.createElement("canvas");
-    wrapper.appendChild(thumbCanvas);
-    slideStrip.appendChild(wrapper);
-
-    wrapper.addEventListener("click", () =>
-      goToSlide(parseInt(wrapper.dataset.page)),
-    );
-
-    (async (pageNum, tc) => {
-      try {
-        const page = await doc.getPage(pageNum);
-        const vp = page.getViewport({ scale: 0.2 });
-        tc.width = vp.width;
-        tc.height = vp.height;
-        await page.render({ canvasContext: tc.getContext("2d"), viewport: vp })
-          .promise;
-      } catch {
-        /* ignore cancelled renders */
-      }
-    })(i, thumbCanvas);
-  }
-}
-
-function updateStripHighlight() {
-  document.querySelectorAll(".strip-thumb").forEach((el) => {
-    el.classList.toggle(
-      "active",
-      parseInt(el.dataset.page) === state.currentSlide,
-    );
-  });
-  const active = slideStrip.querySelector(".strip-thumb.active");
-  if (active)
-    active.scrollIntoView({
-      behavior: "smooth",
-      inline: "center",
-      block: "nearest",
-    });
-}
-
-// ─── PDF Library ──────────────────────────────────────────────────────────────
-
-async function loadPdfLibrary() {
-  try {
-    const res = await fetch("/api/pdfs", {
-      headers: {
-        "X-Requested-With": "XMLHttpRequest",
-        "X-Session-Id": state.sessionId,
-        "X-Upload-Token": state.uploadToken, //  Auth headers
-      },
-    });
-    const pdfs = await res.json();
-    const libList = $("libraryList");
-    
-    if (!pdfs.length) {
-      $("pdfLibrary").style.display = "none";
-      return;
-    }
-
-    // Escape HTML helper
-    const escapeHtml = (text) => {
-      const div = document.createElement("div");
-      div.textContent = text;
-      return div.innerHTML;
-    };
-    
-    $("pdfLibrary").style.display = "block";
-    libList.innerHTML = pdfs
-      .slice(0, 5)
-      .map(
-        (p) =>
-          `<div class="library-item" data-url="${escapeHtml(p.url)}" data-filename="${escapeHtml(p.name)}">
-        <span class="library-name">${escapeHtml(decodeURIComponent(p.name.replace(/^\d+-/, "")))}</span>
-        <div class="library-actions">
-          <span class="library-load">Load →</span>
-          <button class="library-delete" title="Delete file"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg></button>
-        </div>
-      </div>`,
-      )
-      .join("");
-
-    libList.querySelectorAll(".library-item").forEach((el) => {
-      el.addEventListener("click", (e) => {
-        if (e.target.closest(".library-delete")) return;
-        loadPdfFromUrl(el.dataset.url);
-      });
-    });
-
-    libList.querySelectorAll(".library-delete").forEach((btn) => {
-      btn.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        const item = btn.closest(".library-item");
-        const filename = item.dataset.filename;
-        if (!confirm(`Delete "${decodeURIComponent(filename.replace(/^\d+-/, ""))}"?`)) return;
-        
-        try {
-          const res = await fetch(`/api/pdfs/${encodeURIComponent(filename)}`, {
-            method: "DELETE",
-            headers: {
-              "X-Requested-With": "XMLHttpRequest",
-              "X-Session-Id": state.sessionId,
-              "X-Upload-Token": state.uploadToken, //  Auth headers
-            },
-          });
-          if (res.ok) {
-            item.remove();
-            showToast("File deleted");
-            // Hide library if empty
-            if (!libList.querySelectorAll(".library-item").length) {
-              $("pdfLibrary").style.display = "none";
-            }
-          } else {
-            showToast("Failed to delete file");
-          }
-        } catch {
-          showToast("Failed to delete file");
-        }
-      });
-    });
-  } catch {
-    /* ignore */
-  }
-}
-
-// ─── Change PDF Button ────────────────────────────────────────────────────────
-
-const changePdfBtn = $("changePdfBtn");
-if (changePdfBtn) {
-  changePdfBtn.addEventListener("click", () => {
-    //  SECURITY: PDF library disabled - shows all files on server, security risk
-    // loadPdfLibrary();
-    showSwapOverlay();
-  });
-}
-
-// ─── Remote Modal & QR ───────────────────────────────────────────────────────
-
-$("showRemoteBtn").addEventListener("click", async () => {
-  remoteModal.style.display = "flex";
-
-  const savedIp = localStorage.getItem("presenter-ip");
-  if (savedIp) {
-    $("ipInput").value = savedIp;
-  } else {
-    // Auto-detect machine LAN IP and pre-fill input (without applying to QR)
-    try {
-      const res = await fetch("/api/ip");
-      if (res.ok) {
-        const data = await res.json();
-        const selector = $("ipSelector");
-        if (data.all && data.all.length > 1) {
-          // Multiple interfaces — show dropdown
-          selector.innerHTML = "";
-          data.all.forEach(({ address, interface: iface }) => {
-            const opt = document.createElement("option");
-            opt.value = address;
-            opt.textContent = `${address} (${iface})`;
-            selector.appendChild(opt);
-          });
-          selector.style.display = "block";
-          $("ipInput").value = data.all[0].address;
-          $("ipNote").textContent = "Multiple networks detected — select or type IP, then Apply";
-          $("ipNote").style.color = "var(--text-3)";
-        } else if (data.ip) {
-          $("ipInput").value = data.ip;
-          $("ipNote").textContent = "Detected LAN IP — click Apply to update QR";
-          $("ipNote").style.color = "var(--text-3)";
-        }
-      }
-    } catch {}
-  }
-
-  // Regenerate QR when modal opens (canvas needs to be visible)
-  refreshQR(savedIp || null);
-});
-$("closeRemoteModal").addEventListener("click", closeRemoteModal);
-remoteModal.addEventListener("click", (e) => {
-  if (e.target === remoteModal) closeRemoteModal();
-});
-
-function closeRemoteModal() {
-  remoteModal.style.display = "none";
-}
-
-function buildRemoteUrl(ipOverride, urlType = "remote") {
-  const base = urlType === "viewer" ? state.viewerUrl : state.remoteUrl;
-  if (!ipOverride) return base;
-  try {
-    const u = new URL(base);
-    u.hostname = ipOverride.trim();
-    return u.toString();
-  } catch {
-    return base;
-  }
-}
-
-function refreshQR(ipOverride) {
-  const remoteUrl = buildRemoteUrl(ipOverride, "remote");
-  state.remoteUrl = remoteUrl;
-
-  const viewerUrl = buildRemoteUrl(ipOverride, "viewer");
-  state.viewerUrl = viewerUrl;
-
-  if (remoteUrlEl) remoteUrlEl.textContent = remoteUrl || "—";
-
-  // Only generate QR if canvas is visible (has dimensions)
-  if (!qrCanvas || qrCanvas.offsetWidth === 0 || qrCanvas.offsetHeight === 0) {
-    return; // Canvas not visible, skip generation (will retry when modal opens)
-  }
-
-  if (!remoteUrl) return; // No URL to encode
-
-  try {
-    new QRious({
-      element: qrCanvas,
-      value: remoteUrl,
-      size: 200,
-      background: "#ffffff",
-      foreground: "#1a1a2e",
-    });
-
-    const viewerQrCanvas = $("viewerQrCanvas");
-    if (viewerQrCanvas && state.viewerUrl && viewerQrCanvas.offsetWidth > 0) {
-      new QRious({
-        element: viewerQrCanvas,
-        value: viewerUrl,
-        size: 200,
-        background: "#ffffff",
-        foreground: "#1a1a2e",
-      });
-    }
-  } catch (e) {
-    console.error("QR generation failed:", e);
-  }
-}
-
-$("applyIpBtn").addEventListener("click", () => {
-  const ip = $("ipInput").value.trim();
-  const ipNote = $("ipNote");
-
-  if (ip && !/^[\d.a-zA-Z:-]+$/.test(ip)) {
-    ipNote.textContent = "Invalid IP address";
-    ipNote.style.color = "var(--danger)";
-    return;
-  }
-
-  if (ip) {
-    localStorage.setItem("presenter-ip", ip);
-  } else {
-    localStorage.removeItem("presenter-ip");
-  }
-
-  refreshQR(ip || null);
-  ipNote.textContent = ip
-    ? `QR now points to ${ip}`
-    : "Using localhost (LAN devices won't reach this)";
-  ipNote.style.color = ip ? "var(--success)" : "var(--text-3)";
-  showToast(ip ? `QR updated to ${ip}` : "Reset to localhost");
-});
-
-$("ipInput").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") $("applyIpBtn").click();
-});
-
-$("ipSelector").addEventListener("change", (e) => {
-  $("ipInput").value = e.target.value;
-});
-
-$("copyUrlBtn").addEventListener("click", () => {
-  if (!state.remoteUrl) return;
-  
-  // Check if clipboard API is available (requires secure context - HTTPS)
-  if (!navigator.clipboard || !navigator.clipboard.writeText) {
-    // Fallback for HTTP/non-secure contexts - copy manually
-    const textArea = document.createElement("textarea");
-    textArea.value = state.remoteUrl;
-    textArea.style.position = "fixed";
-    textArea.style.left = "-9999px";
-    document.body.appendChild(textArea);
-    textArea.select();
-    try {
-      document.execCommand("copy");
-      showToast("Link copied to clipboard");
-    } catch (err) {
-      showToast("Copy failed — select the URL manually");
-    }
-    document.body.removeChild(textArea);
-    return;
-  }
-  
-  navigator.clipboard
-    .writeText(state.remoteUrl)
-    .then(() => showToast("Link copied to clipboard"))
-    .catch(() => showToast("Copy failed — select the URL manually"));
-});
-
-// ─── Viewer Modal & QR ───────────────────────────────────────────────────────
-
-const viewerModal = $("viewerModal");
-let currentOrientation = localStorage.getItem("presenter-orientation") || "landscape";
-
-function updateOrientationButtons() {
-  const landscapeBtn = $("orientLandscape");
-  const portraitBtn = $("orientPortrait");
-  if (landscapeBtn && portraitBtn) {
-    landscapeBtn.classList.toggle("active", currentOrientation === "landscape");
-    portraitBtn.classList.toggle("active", currentOrientation === "portrait");
-  }
-}
-
-$("showViewerBtn").addEventListener("click", () => {
-  viewerModal.style.display = "flex";
-  updateOrientationButtons();
-  const savedIp = localStorage.getItem("presenter-ip");
-  refreshViewerQR(savedIp || null);
-});
-
-$("closeViewerModal").addEventListener("click", closeViewerModal);
-viewerModal.addEventListener("click", (e) => {
-  if (e.target === viewerModal) closeViewerModal();
-});
-
-function closeViewerModal() {
-  viewerModal.style.display = "none";
-}
-
-$("orientLandscape").addEventListener("click", () => {
-  currentOrientation = "landscape";
-  localStorage.setItem("presenter-orientation", currentOrientation);
-  updateOrientationButtons();
-  showToast("Orientation set to Landscape");
-  const savedIp = localStorage.getItem("presenter-ip");
-  refreshViewerQR(savedIp || null);
-});
-
-$("orientPortrait").addEventListener("click", () => {
-  currentOrientation = "portrait";
-  localStorage.setItem("presenter-orientation", currentOrientation);
-  updateOrientationButtons();
-  showToast("Orientation set to Portrait");
-  const savedIp = localStorage.getItem("presenter-ip");
-  refreshViewerQR(savedIp || null);
-});
-
-function refreshViewerQR(ipOverride) {
-  if (!state.viewerUrl) return;
-
-  let viewerUrl = buildRemoteUrl(ipOverride, "viewer");
-  const url = new URL(viewerUrl);
-  url.searchParams.set("orient", currentOrientation);
-  viewerUrl = url.toString();
-
-  const viewerUrlDisplay = $("viewerUrlDisplay");
-  if (viewerUrlDisplay) viewerUrlDisplay.textContent = viewerUrl;
-
-  const viewerCountEl = $("viewerCount");
-  if (viewerCountEl) {
-    viewerCountEl.textContent = `${state.connectedViewers} viewer(s) connected`;
-  }
-
-  const viewerModalSessionId = $("viewerModalSessionId");
-  if (viewerModalSessionId) viewerModalSessionId.textContent = state.sessionId || "—";
-
-  const viewerQrCanvas = $("viewerQrCanvas");
-  if (viewerQrCanvas) {
-    try {
-      new QRious({
-        element: viewerQrCanvas,
-        value: viewerUrl,
-        size: 200,
-        background: "#ffffff",
-        foreground: "#1a1a2e",
-      });
-    } catch (e) {
-      console.error("Viewer QR generation failed:", e);
-    }
-  }
-}
-
-$("copyViewerUrlBtn").addEventListener("click", () => {
-  if (!state.viewerUrl) return;
-  const url = new URL(buildRemoteUrl(null, "viewer"));
-  url.searchParams.set("orient", currentOrientation);
-  const urlString = url.toString();
-  
-  if (navigator.clipboard && window.isSecureContext) {
-    navigator.clipboard
-      .writeText(urlString)
-      .then(() => showToast("Viewer link copied"))
-      .catch(() => showToast("Copy failed"));
-  } else {
-    // Fallback for non-secure contexts (HTTP)
-    const textArea = document.createElement("textarea");
-    textArea.value = urlString;
-    textArea.style.position = "fixed";
-    textArea.style.left = "-9999px";
-    document.body.appendChild(textArea);
-    textArea.focus();
-    textArea.select();
-    try {
-      document.execCommand("copy");
-      showToast("Viewer link copied");
-    } catch (err) {
-      showToast("Copy failed - please copy manually");
-      console.error("Copy failed:", err);
-    }
-    document.body.removeChild(textArea);
-  }
-});
-
-// ─── Theme Toggle ─────────────────────────────────────────────────────────────
-
-const themeToggle = $("themeToggle");
-let isDark = true;
-
-themeToggle.addEventListener("click", () => {
-  isDark = !isDark;
-  document.documentElement.dataset.theme = isDark ? "dark" : "light";
-  themeToggle.innerHTML = isDark ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72l1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>' : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>';
-  localStorage.setItem("presenter-theme", isDark ? "dark" : "light");
-});
-
-// Setup page theme toggle
-const setupThemeToggle = $("setupThemeToggle");
-if (setupThemeToggle) {
-  setupThemeToggle.addEventListener("click", () => {
-    isDark = !isDark;
-    document.documentElement.dataset.theme = isDark ? "dark" : "light";
-    setupThemeToggle.innerHTML = isDark ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72l1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>' : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>';
-    localStorage.setItem("presenter-theme", isDark ? "dark" : "light");
-  });
-}
-
-const savedTheme = localStorage.getItem("presenter-theme");
-if (savedTheme === "light") {
-  isDark = false;
-  document.documentElement.dataset.theme = "light";
-  themeToggle.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>';
-  if (setupThemeToggle) {
-    setupThemeToggle.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>';
-  }
-}
-
-// ─── Fullscreen ───────────────────────────────────────────────────────────────
-
-const fullscreenBtn = $("fullscreenBtn");
-
-function toggleFullscreen() {
-  if (!document.fullscreenElement) {
-    document.documentElement.requestFullscreen().catch(() => {});
-    fullscreenBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg>';
-  } else {
-    document.exitFullscreen();
-  }
-}
-
-fullscreenBtn.addEventListener("click", toggleFullscreen);
-
-document.addEventListener("fullscreenchange", () => {
-  const inFS = !!document.fullscreenElement;
-  fullscreenBtn.innerHTML = inFS ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3v3a2 2 0 01-2 2H3m18 0h-3a2 2 0 01-2-2V3m0 18v-3a2 2 0 012-2h3M3 16h3a2 2 0 012 2v3"/></svg>' : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg>';
-  topbar.classList.toggle("hidden", inFS);
-  slideStrip.classList.toggle("fs-hidden", inFS);
-  slideWrapper.classList.toggle("fs-mode", inFS);
-  if (state.pdfDoc) renderSlide(state.currentSlide);
-});
-
-let resizeTimer;
-window.addEventListener("resize", () => {
-  clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => {
-    if (state.pdfDoc) renderSlide(state.currentSlide);
-  }, 200);
-});
-
-// ─── Toast Helper ─────────────────────────────────────────────────────────────
-
-let toastTimer;
-function showToast(msg) {
-  toast.textContent = msg;
-  toast.classList.add("show");
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toast.classList.remove("show"), 3200);
-}
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 
-// Try to restore existing session, otherwise create new
-async function bootstrap() {
-  const restored = await restoreSession();
-  if (!restored) {
-    // No existing session - show setup overlay for new session creation
-    setupOverlay.style.display = "flex";
-    // Auto-focus and select session name input
-    const nameInput = $("sessionNameInput");
-    if (nameInput) {
-      nameInput.focus();
-      nameInput.select();
-    }
-  }
-}
-
-bootstrap();
-
-// ─── Start Session Button Handler ─────────────────────────────────────────────
-
-// Allow Enter key to submit from name or password input
-$("sessionNameInput")?.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") $("startSessionBtn")?.click();
-});
-$("sessionPasswordInput")?.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") $("startSessionBtn")?.click();
-});
-
-// Password visibility toggle
-$("toggleSessionPassword")?.addEventListener("click", () => {
-  const input = $("sessionPasswordInput");
-  const btn = $("toggleSessionPassword");
-  if (input.type === "password") {
-    input.type = "text";
-    btn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
-    btn.title = "Hide password";
-  } else {
-    input.type = "password";
-    btn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
-    btn.title = "Show password";
-  }
-});
-
-$("startSessionBtn")?.addEventListener("click", async () => {
-  const nameInput = $("sessionNameInput");
-  const sessionName = nameInput?.value?.trim() || null;
-
-  //  SECURITY: Get optional viewer password (min 4 chars if provided)
-  const passwordInput = $("sessionPasswordInput");
-  const password = passwordInput?.value?.trim() || null;
-  if (password && password.length < 4) {
-    showToast("Password must be at least 4 characters");
-    return;
-  }
-
-  await initSession(sessionName, password);
-
-  const uploadZone = $("uploadZone");
-  const startBtn = $("startSessionBtn");
-  const nameInputDiv = nameInput?.parentElement;
-  const passwordInputDiv = passwordInput?.parentElement;
-
-  if (uploadZone) uploadZone.style.display = "block";
-  if (startBtn) startBtn.style.display = "none";
-  if (nameInputDiv) nameInputDiv.style.display = "none";
-  if (passwordInputDiv) passwordInputDiv.style.display = "none";
-
-  const subtitle = $("setupSubtitle");
-  if (subtitle) subtitle.textContent = "Session created! Upload a PDF to start presenting.";
-});
-
-// ─── End Session Button Handler ───────────────────────────────────────────────
-
-$("endSessionBtn")?.addEventListener("click", () => {
-  if (confirm("Are you sure you want to end this session? All viewers and remotes will be disconnected.")) {
-    endSession();
-  }
-});
-
-// ─── Dhikr Toast Notifications ────────────────────────────────────────────────
-
-const dhikrList = [
-  "الْحَمْدُ لِلَّهِ",
-  "لَا إِلٰهَ إِلَّا اللَّهُ",
-  "اللَّهُ أَكْبَرُ",
-  "سُبْحَانَ اللَّه",
-  "اللَّهُمَّ صَلِّ عَلَىٰ مُحَمَّدٍ ﷺ",
-  "اللَّهُمَّ إِنِّي أَسْأَلُكَ الْجَنَّةَ",
-  "اللَّهُ أَكْبَرُ كَبِيرًا",
-  "الْحَمْدُ لِلَّهِ كَثِيرًا",
-  "سُبْحَانَ اللَّهِ بُكْرَةً وَأَصِيلًا",
-  "اللَّهُمَّ يَسِّرْ لِي أَمْرِي",
-  "اللَّهُمَّ اغْفِرْ لِي",
-  "اللَّهُمَّ اشْرَحْ لِي صَدْرِي"
-];
-
-let dhikrToastElement = null;
-let dhikrInterval = null;
-
-function showDhikrToast() {
-  if (document.fullscreenElement) return;
-  
-  const randomDhikr = dhikrList[Math.floor(Math.random() * dhikrList.length)];
-  
-  if (!dhikrToastElement) {
-    dhikrToastElement = document.createElement("div");
-    dhikrToastElement.className = "dhikr-toast";
-    dhikrToastElement.addEventListener("click", hideDhikrToast);
-    document.body.appendChild(dhikrToastElement);
-  }
-  
-  dhikrToastElement.textContent = randomDhikr;
-  dhikrToastElement.classList.add("visible");
-  
-  setTimeout(() => {
-    hideDhikrToast();
-  }, 8000);
-}
-
-function hideDhikrToast() {
-  if (dhikrToastElement) {
-    dhikrToastElement.classList.remove("visible");
-  }
-}
-
-function startDhikrNotifications() {
-  setTimeout(() => {
-    showDhikrToast();
-  }, 2000);
-  
-  const scheduleNextDhikr = () => {
-    const randomDelay = Math.floor(Math.random() * 180000) + 120000; // 2-5 minutes
-    dhikrInterval = setTimeout(() => {
-      showDhikrToast();
-      scheduleNextDhikr();
-    }, randomDelay);
-  };
-  
-  scheduleNextDhikr();
-}
-
-function stopDhikrNotifications() {
-  if (dhikrInterval) {
-    clearTimeout(dhikrInterval);
-    dhikrInterval = null;
-  }
-  hideDhikrToast();
-  startDhikrNotifications();
-}
-
-startDhikrNotifications();
-
-// ─── Like Button Functionality ────────────────────────────────────────────────
-
-const likeBtn = $("likeBtn");
-const likeCount = $("likeCount");
-let currentHasLiked = false;
-
-// Generate or retrieve device ID for unique like tracking
-function getDeviceId() {
-  let deviceId = localStorage.getItem("pdf-presenter-device-id");
-  if (!deviceId) {
-    deviceId = crypto.randomUUID?.() || Math.random().toString(36).substring(2, 15);
-    localStorage.setItem("pdf-presenter-device-id", deviceId);
-  }
-  return deviceId;
-}
-
-// Fetch like data from server
-async function fetchLikeData() {
-  const deviceId = getDeviceId();
-  try {
-    const response = await fetch(`/api/likes?deviceId=${deviceId}`);
-    if (response.ok) {
-      const data = await response.json();
-      if (likeCount) likeCount.textContent = data.count;
-      currentHasLiked = data.hasLiked;
-      if (likeBtn) {
-        if (currentHasLiked) {
-          likeBtn.classList.add("liked");
-        } else {
-          likeBtn.classList.remove("liked");
-        }
-      }
-    }
-  } catch (err) {
-    console.error("[Likes] Failed to fetch like data:", err);
-  }
-}
-
-// Handle like button click
-async function handleLike() {
-  const deviceId = getDeviceId();
-  const action = currentHasLiked ? "unlike" : "like";
-  
-  try {
-    const response = await fetch("/api/likes", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ deviceId, action })
-    });
-    
-    if (response.ok) {
-      const data = await response.json();
-      if (likeCount) likeCount.textContent = data.count;
-      currentHasLiked = data.hasLiked;
-      if (likeBtn) {
-        if (currentHasLiked) {
-          likeBtn.classList.add("liked");
-        } else {
-          likeBtn.classList.remove("liked");
-        }
-      }
-    }
-  } catch (err) {
-    console.error("[Likes] Failed to update like:", err);
-  }
-}
-
-// Initialize like button
-if (likeBtn) {
-  likeBtn.addEventListener("click", handleLike);
-  fetchLikeData();
-}
+startDhikr({ isSuppressed: () => Boolean(fullscreenElement()) });
+loadLikes();
+setOrientation(state.orientation);
+if (!(await restoreSession())) setSetupMode("create");
